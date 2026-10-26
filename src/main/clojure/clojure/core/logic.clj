@@ -4308,8 +4308,8 @@
     (cond
       (lvar? x) [front x back]
       (lvec? x) (recur (walkf (.mid ^LVec x))
-                       (into front (.front ^LVec x))
-                       (into (.back ^LVec x) back))
+                       (if (empty? front) (.front ^LVec x) (into front (.front ^LVec x)))
+                       (if (empty? back) (.back ^LVec x) (into (.back ^LVec x) back)))
       (lcons? x) (let [[front t] (loop [x x front front]
                                    (if (lcons? x)
                                      (recur (walkf (lnext x)) (conj front (lfirst x)))
@@ -4327,6 +4327,21 @@
    see seq-parts*."
   [s x]
   (seq-parts* #(walk s %) x))
+
+(defn- seq-compress
+  "Rebinds the var x, if it holds a sequence spanning more than one LVec,
+   to the equal flat sequence, as compress-map does for maps. Takes and
+   returns a substitution."
+  [s x]
+  (if (lvar? x)
+    (let [root (root-var s x)
+          sm (:s s)
+          v (get sm root)]
+      (if (and (lvec? v) (not (lvar? (walk s (.mid ^LVec v)))))
+        (let [[f m b] (seq-parts s root)]
+          (assoc s :s (assoc sm root (lvec* f m b))))
+        s))
+    s))
 
 (defn- lvec-join
   "The sequence front, then the sequence m, then back."
@@ -4567,7 +4582,8 @@
   [v n pre x post rel args]
   (fn [s]
     (when-let [[f m b] (seq-parts s v)]
-      (let [nf (count f)
+      (let [s (seq-compress s v)
+            nf (count f)
             pre-is #(if pre (== pre %) succeed)
             post-is #(if post (== post %) succeed)]
         (cond
