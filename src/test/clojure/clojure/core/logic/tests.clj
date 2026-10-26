@@ -5,7 +5,8 @@
         clojure.test)
   (:require [clojure.core.logic.fd :as fd])
   (:require [clojure.core.logic.unifier :as u])
-  (:require [clojure.pprint :as pp]))
+  (:require [clojure.pprint :as pp]
+            [clojure.walk]))
 
 ;; =============================================================================
 ;; unify
@@ -4556,3 +4557,77 @@
   (is (= (run* [q] (absento [1] q) (== q [[1]])) '()))
   (is (= (run* [q] (absento [1] q) (== q [[2]])) '([[2]])))
   (is (= (run* [q] (absento :a q) (geto q :a 1)) '())))
+
+;; -----------------------------------------------------------------------------
+;; faster-miniKanren's simple relational interpreter (quines), ported
+
+(declare eval-expo)
+
+(defrel not-in-envo [x env]
+  (conde
+   [(== () env)]
+   [(fresh [y v rest]
+      (== (lcons (lcons y v) rest) env)
+      (!= y x)
+      (not-in-envo x rest))]))
+
+(defrel lookupo [x env t]
+  (fresh [rest y v]
+    (== (lcons (lcons y v) rest) env)
+    (conde
+     [(== y x) (== v t)]
+     [(!= y x) (lookupo x rest t)])))
+
+(defrel proper-listo [exp env val]
+  (conde
+   [(== () exp) (== () val)]
+   [(fresh [a d t-a t-d]
+      (== (lcons a d) exp)
+      (== (lcons t-a t-d) val)
+      (eval-expo a env t-a)
+      (proper-listo d env t-d))]))
+
+(defrel eval-expo [expr env val]
+  (conde
+   [(fresh [v]
+      (== (list 'quote v) expr)
+      (not-in-envo 'quote env)
+      (absento 'closure v)
+      (== v val))]
+   [(fresh [a*]
+      (== (lcons 'list a*) expr)
+      (not-in-envo 'list env)
+      (absento 'closure a*)
+      (proper-listo a* env val))]
+   [(symbolo expr) (lookupo expr env val)]
+   [(fresh [rator rand x body env2 a]
+      (== (list rator rand) expr)
+      (eval-expo rator env (list 'closure x body env2))
+      (eval-expo rand env a)
+      (eval-expo body (lcons (lcons x a) env2) val))]
+   [(fresh [x body]
+      (== (list 'lambda (list x) body) expr)
+      (symbolo x)
+      (not-in-envo 'lambda env)
+      (== (list 'closure x body env) val))]))
+
+(defn- evalo [expr val] (eval-expo expr () val))
+
+
+(deftest test-relational-interpreter
+  (is (= (run* [v] (evalo '((lambda (x) x) (quote 5)) v)) '(5)))
+  (is (= (count (run 5 [q] (evalo q 6))) 5)))
+
+(deftest test-quine
+  (let [[ans] (run 1 [q] (evalo q q))
+        [quine] ans
+        ;; the quine's variable as a concrete symbol
+        quine (clojure.walk/postwalk-replace {'_0 'x} quine)]
+    (is (= (run* [v] (evalo quine v)) (list quine)))))
+
+(deftest test-twine
+  (let [[[[p q]]] (run 1 [p q] (!= p q) (evalo p q) (evalo q p))
+        [p q] (clojure.walk/postwalk-replace {'_0 'x} [p q])]
+    (is (not= p q))
+    (is (= (run* [v] (evalo p v)) (list q)))
+    (is (= (run* [v] (evalo q v)) (list p)))))

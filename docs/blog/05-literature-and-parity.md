@@ -115,7 +115,7 @@ core.logic is **ahead** on tabling, nominal logic (αKanren), CLP(FD) and the
 fact database. It **matches** on `==`, `fresh`, `conde` interleaving,
 `conda`/`condu`, `project`, pattern matching, disequality and the default
 occurs check. It was **behind** on these, most important first. The fork has closed
-the first, second and fourth:
+the first, second, fourth and fifth:
 
 1. ~~`symbolo`, `numbero`, `stringo` are not real type constraints.~~ They
    are now. A constrained variable carries its type, so `(symbolo x)` with
@@ -127,15 +127,17 @@ the first, second and fourth:
    or maps. The cljs core is an old separate copy, not shared code.
 4. ~~No `defrel`.~~ `defrel` defines a relation whose body is suspended until
    it is searched, as in *The Reasoned Schemer*.
-5. **No port of faster-miniKanren's interpreter and quine benchmarks**, so
-   the cost of all this against faster-miniKanren is unmeasured.
+5. ~~No port of faster-miniKanren's interpreter and quine benchmarks.~~
+   The simple relational interpreter now runs as a test. It finds the classic
+   quine `((lambda (x) (list x (list 'quote x))) '(lambda (x) (list x (list 'quote x))))`
+   in about 30 ms and a twine in about 0.2 s on the JVM.
 6. **FD domains aren't reified**: answers don't show the domains their
    variables are still constrained to.
 7. **`!=` on maps with unknown keys** works, and is now tested. Its leftover
    constraint prints awkwardly, as `(!= ({_0 1} {:a 1}))`.
 
-With items 1, 2 and 4 in place, the relational-interpreter benchmarks, the
-standard test of a miniKanren, can be ported (item 5).
+What remains is ClojureScript, reifying FD domains, and tidier printing of
+`!=` on maps.
 
 ## References
 
