@@ -133,11 +133,11 @@ the first, second, fourth and fifth:
    in about 30 ms and a twine in about 0.2 s on the JVM.
 6. **FD domains aren't reified**: answers don't show the domains their
    variables are still constrained to.
-7. **`!=` on maps with unknown keys** works, and is now tested. Its leftover
-   constraint prints awkwardly, as `(!= ({_0 1} {:a 1}))`.
+7. ~~`!=` on maps with unknown keys~~ works, and is now tested. Its leftover
+   constraint keeps the two maps as one pair, `(!= ({_0 1} {:a 1}))`, in the
+   same `(!= (lhs rhs))` form core.logic uses for every disequality.
 
-What remains is ClojureScript, reifying FD domains, and tidier printing of
-`!=` on maps.
+What remains is ClojureScript and reifying FD domains.
 
 ## References
 
