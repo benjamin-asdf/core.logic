@@ -4503,3 +4503,56 @@
          '(nil {} {:a nil} {:a {}} {:a {:b _0}})))
   (is (= (run* [ks] (assoc-ino {:a {:b 1}} ks 2 {:a {:b 2}}))
          '((:a :b)))))
+
+;; =============================================================================
+;; miniKanren parity
+
+(defrel appendo-rel [l s out]
+  (conde
+   [(== l ()) (== s out)]
+   [(fresh [a d res]
+      (conso a d l)
+      (conso a res out)
+      (appendo-rel d s res))]))
+
+(deftest test-defrel
+  (is (= (run* [x y] (appendo-rel x y [1 2]))
+         '([() [1 2]] [(1) (2)] [(1 2) ()])))
+  ;; compared as printed: a quoted (_0 . _1) is not a partial list
+  (is (= (map pr-str (run 2 [x y z] (appendo-rel x y z)))
+         ["[() _0 _0]" "[(_0) _1 (_0 . _1)]"])))
+
+(deftest test-type-constraints
+  (is (= (run* [q] (symbolo q)) `((~'_0 :- (symbolo ~'_0)))))
+  (is (= (run* [q] (symbolo q) (== q 'a)) '(a)))
+  (is (= (run* [q] (symbolo q) (== q 1)) '()))
+  (is (= (run* [q] (numbero q) (== q 1)) '(1)))
+  (is (= (run* [q] (stringo q) (== q "a")) '("a")))
+  (is (= (run* [q] (numbero q) (== q (lcons 1 (lvar)))) '())))
+
+(deftest test-type-conflicts
+  ;; conflicting types fail while still unbound
+  (is (= (run* [q] (symbolo q) (numbero q)) '()))
+  (is (= (run* [q]
+           (fresh [x y]
+             (symbolo x)
+             (numbero y)
+             (== x y)
+             (== q 1)))
+         '()))
+  (is (= (run* [q]
+           (fresh [x y]
+             (symbolo x)
+             (symbolo y)
+             (== x y)
+             (== q [x y])))
+         `(([~'_0 ~'_0] :- (symbolo ~'_0))))))
+
+(deftest test-absento
+  (is (= (run* [q] (absento 'closure q))
+         `((~'_0 :- (absento ~'closure ~'_0)))))
+  (is (= (run* [q] (absento 'closure q) (== q '(1 closure))) '()))
+  (is (= (run* [q] (fresh [x] (absento 1 [x 2]) (== x 1) (== q 1))) '()))
+  (is (= (run* [q] (absento [1] q) (== q [[1]])) '()))
+  (is (= (run* [q] (absento [1] q) (== q [[2]])) '([[2]])))
+  (is (= (run* [q] (absento :a q) (geto q :a 1)) '())))

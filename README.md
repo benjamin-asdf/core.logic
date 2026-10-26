@@ -94,6 +94,10 @@ vectors, in every direction:
 | `(get-ino m ks v)` | `(get-in m ks)` is `v`, and the path `ks` exists |
 | `(assoc-ino m ks v out)` | `out` is `(assoc-in m ks v)`; missing levels become maps, as in Clojure |
 
+**miniKanren parity.** `defrel`, the type constraints `symbolo`, `numbero` and
+`stringo`, and `absento`, with faster-miniKanren's semantics: conflicting
+types fail while the variable is still unbound.
+
 **Later:** records as data-level types (schema inference run backwards), relational sets, and the
 ClojureScript port.
 

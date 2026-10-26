@@ -4934,6 +4934,111 @@
                    [(missingo m' k) (== x nil)])
                   (assoc-ino x more v x'))])))
 
+;; =============================================================================
+;; miniKanren parity: defrel, type constraints, absento
+
+(defmacro defrel
+  "Defines a relation, as in The Reasoned Schemer: like defn, but the body
+   is a conjunction of goals, suspended until the relation is searched, so
+   that recursive relations interleave fairly."
+  [name & more]
+  (let [[doc more] (if (string? (first more)) [[(first more)] (next more)] [[] more])
+        [args & goals] more]
+    `(defn ~name ~@doc ~args
+       (fn [a#]
+         (-inc (bind* a# succeed ~@goals))))))
+
+;; Type constraints. A var constrained to a type carries the type as a
+;; domain, so that unifying two vars of different types fails at once, and
+;; a constraint checks the value it is bound to.
+
+(deftype TypeDom [t]
+  IMergeDomains
+  (-merge-doms [a b]
+    (when (= t (.t ^TypeDom b)) a)))
+
+(def ^:private type-preds
+  {:sym symbol? :num number? :str string?})
+
+(defn- -typec [x t rel]
+  (reify
+    IConstraintStep
+    (-step [this s]
+      (reify
+        clojure.lang.IFn
+        (invoke [_ s]
+          (when ((type-preds t) (walk s x))
+            ((remcg this) s)))
+        IRunnable
+        (-runnable? [_]
+          (not (lvar? (walk s x))))))
+    IConstraintOp
+    (-rator [_] rel)
+    (-rands [_] [x])
+    IReifiableConstraint
+    (-reifyc [_ v r s]
+      (list rel (-reify s x r)))
+    IConstraintWatchedStores
+    (-watched-stores [_] #{::subst})))
+
+(defn- typeo [t rel x]
+  (fn [s]
+    (let [v (walk s x)]
+      (if (lvar? v)
+        (let [d (get-dom s v ::type)]
+          (cond
+            (nil? d) ((cgoal (-typec v t rel)) (add-dom s v ::type (TypeDom. t)))
+            (= t (.t ^TypeDom d)) s
+            :else nil))
+        (when ((type-preds t) v) s)))))
+
+(defn symbolo
+  "A constraint that x is a symbol."
+  [x]
+  (typeo :sym `symbolo x))
+
+(defn numbero
+  "A constraint that x is a number."
+  [x]
+  (typeo :num `numbero x))
+
+(defn stringo
+  "A constraint that x is a string."
+  [x]
+  (typeo :str `stringo x))
+
+(defn- term-children
+  "The subterms of the walked term x, or nil if it has none."
+  [x]
+  (cond
+    (lcons? x) [(lfirst x) (lnext x)]
+    (lmap? x) (concat (keys (lmap-entries x)) (vals (lmap-entries x)) [(lmap-rest x)])
+    (lvec? x) (let [[f m b] (lvec-parts x)] (concat f [m] b))
+    (map? x) (concat (keys x) (vals x))
+    (coll? x) (seq x)
+    :else nil))
+
+(defn absento
+  "A constraint that the term t occurs nowhere in the term x."
+  [t x]
+  (fn [s]
+    (let [t' (walk* s t)
+          x' (walk s x)]
+      (cond
+        (not (ground-term? t' s))
+        ((lmap-suspend `absento [t x] #(absento t x) [t]) s)
+
+        (lvar? x')
+        ((lmap-suspend `absento [t x] #(absento t x) [x]) s)
+
+        :else
+        ((all
+          (if (or (coll? t') (tree-term? t'))
+            (!= x' t')
+            (if (= x' t') fail succeed))
+          (everyg #(absento t' %) (term-children x')))
+         s)))))
+
 (extend-protocol IDisunifyTerms
   LVec
   (-disunify-terms [u v s cs]

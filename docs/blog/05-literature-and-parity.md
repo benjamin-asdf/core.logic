@@ -114,30 +114,28 @@ Compared with faster-miniKanren and *The Reasoned Schemer* (2nd ed.),
 core.logic is **ahead** on tabling, nominal logic (αKanren), CLP(FD) and the
 fact database. It **matches** on `==`, `fresh`, `conde` interleaving,
 `conda`/`condu`, `project`, pattern matching, disequality and the default
-occurs check. It is **behind** on these, most important first:
+occurs check. It was **behind** on these, most important first. The fork has closed
+the first, second and fourth:
 
-1. **`symbolo`, `numbero`, `stringo` are not real type constraints.**
-   `(predc x symbol?)` only checks once `x` is bound, so `x` being both a
-   symbol and a number isn't noticed while `x` is unbound. faster-miniKanren
-   treats types as disjoint and fails at once. Relational interpreters rely on
-   that for pruning.
-2. **No native `absento`.** It can be built from `treec` and `!=`, which is
-   probably slow (not measured yet).
+1. ~~`symbolo`, `numbero`, `stringo` are not real type constraints.~~ They
+   are now. A constrained variable carries its type, so `(symbolo x)` with
+   `(numbero x)` fails while `x` is still unbound, as does unifying a
+   symbol-typed variable with a number-typed one.
+2. ~~No native `absento`.~~ `(absento t x)` now waits on each unbound part
+   of `x`, and keys of maps count as parts.
 3. **ClojureScript has no constraints at all**: no `!=`, FD, nominal, tabling
    or maps. The cljs core is an old separate copy, not shared code.
-4. **No `defrel`.** Recursive relations can recurse eagerly before
-   interleaving unless you remember to wrap them in `fresh`.
+4. ~~No `defrel`.~~ `defrel` defines a relation whose body is suspended until
+   it is searched, as in *The Reasoned Schemer*.
 5. **No port of faster-miniKanren's interpreter and quine benchmarks**, so
-   items 1, 2 and 4 are unmeasured.
+   the cost of all this against faster-miniKanren is unmeasured.
 6. **FD domains aren't reified**: answers don't show the domains their
-   variables are still constrained to. This matters once vector lengths are
-   FD variables.
+   variables are still constrained to.
 7. **`!=` on maps with unknown keys** works, and is now tested. Its leftover
    constraint prints awkwardly, as `(!= ({_0 1} {:a 1}))`.
 
-Item 1 also gives the planned records a natural place for type tags. Items 1,
-2, 4 and 5 together are what it would take to run the relational-interpreter
-benchmarks, the standard test of a miniKanren.
+With items 1, 2 and 4 in place, the relational-interpreter benchmarks, the
+standard test of a miniKanren, can be ported (item 5).
 
 ## References
 
