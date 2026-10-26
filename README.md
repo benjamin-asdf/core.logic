@@ -1,3 +1,137 @@
+core.logic — relational data fork
+====
+
+This is my fork of [clojure/core.logic](https://github.com/clojure/core.logic).
+It is about one thing: **making Clojure's own data relational**. miniKanren is at
+its best on lists and trees; idiomatic Clojure lives in maps and vectors. This
+fork makes maps and vectors first-class relational terms, and keeps a strict
+rule: no operation may silently give up. Everything either answers correctly in
+every mode, or waits until it can.
+
+The full upstream test suite still passes. Where the fork changes upstream
+behaviour, it is listed under [Changes from upstream](#changes-from-upstream).
+
+What's here
+----
+
+**Relational maps (done, JVM).** A map in a query can be partly unknown. Every
+map relation runs in every direction:
+
+```clojure
+(run* [m] (geto m :a 1) (geto m :b 2))
+;;=> ((lmap {:b 2, :a 1} | _0))     ;; an open map: these entries, plus unknowns
+
+(run* [m] (assoco m :b 2 {:a 1 :b 2}))
+;;=> ({:a 1} {:a 1, :b _0})          ;; m had no :b, or had :b with some value
+
+(run* [m1 m2] (mergeo m1 m2 {:a 1}))
+;;=> ([{:a 1} {}] [{} {:a 1}] [{:a _0} {:a 1}])
+
+(run* [k1 k2 v] (== {k1 v k2 v} {:a 1 :b 1}))
+;;=> ([:a :b 1] [:b :a 1])           ;; plain maps with unknown keys unify too
+```
+
+| Relation | Means |
+|---|---|
+| `(geto m k v)` | `(get m k)` is `v` |
+| `(assoco m k v out)` | `out` is `(assoc m k v)` |
+| `(dissoco m k out)` | `out` is `(dissoc m k)` |
+| `(mergeo m1 m2 out)` | `out` is `(merge m1 m2)` |
+| `(keyso m ks)` / `(valso m vs)` | the keys / values of `m`, in any order |
+| `(selectso m ks out)` | `out` is `(select-keys m ks)` |
+| `(lmapo m entries rest)` | `m` is `entries` plus a map `rest` without their keys |
+| `(lacks-keyo m & ks)` | `m` has none of the keys `ks` |
+
+Plain Clojure maps are relational too: `(== {k 1} {:a 1})` binds `k` to
+`:a`, and maps never end up with two equal keys, even when the keys only
+become equal later.
+
+**Relational vectors (done, JVM).** A vector that is partly known has a known
+front, an unknown middle and a known back, so `conjo`, `peeko` and `popo` work
+on the end without searching. Lengths are solved exactly, so vectors whose
+lengths can't match fail at once:
+
+```clojure
+(run 3 [i v] (ntho v i :x))
+;;=> ([0 (lvec [:x] | _0 | [])] [1 (lvec [_0 :x] | _1 | [])] [2 (lvec [_0 _1 :x] | _2 | [])])
+
+(run* [a b] (concato a b [1 2 3]))
+;;=> ([[] [1 2 3]] [[1] [2 3]] [[1 2] [3]] [[1 2 3] []])
+
+(run* [x] (fresh [u e]
+            (geto {:users [{:name "a"} {:name "b"}]} :users u)
+            (geto u 1 e)
+            (geto e :name x)))
+;;=> ("b")
+```
+
+| Relation | Means |
+|---|---|
+| `(ntho v i x)` | `(nth v i)` is `x` |
+| `(counto c n)` | `(count c)` is `n`, for vectors and maps |
+| `(conjo c x out)` | `out` is `(conj c x)`: at the back of a vector, the front of a list |
+| `(peeko c x)` / `(popo c out)` | `(peek c)` / `(pop c)` |
+| `(concato a b out)` | `out` is `a`'s elements, then `b`'s |
+| `(subveco v start end out)` | `out` is `(subvec v start end)` |
+| `geto`, `assoco` | also on vectors, with an index as key, like `get` and `assoc` |
+
+Vectors keep unifying with lists, as they are `=` in Clojure. See
+[the vectors post](docs/blog/04-vectors.md).
+
+**Later:** `get-in`/`assoc-in` over mixed maps and vectors, records as
+data-level types (schema inference run backwards), relational sets, and the
+ClojureScript port.
+
+The posts
+----
+
+1. [Relational maps](docs/blog/01-relational-maps.md): a tour of the API.
+2. [No unsupported behaviour](docs/blog/02-no-unsupported-behaviour.md): why
+   the design had to be redone, and how unknown keys, lazy checks and
+   suspended goals fit together.
+3. [Making it fast](docs/blog/03-making-it-fast.md): from 33 s to 8 ms, and
+   what was slow.
+4. [Vectors](docs/blog/04-vectors.md): open vectors, and lengths solved
+   exactly.
+5. [Literature and miniKanren parity](docs/blog/05-literature-and-parity.md):
+   where this sits in the research, and what core.logic still lacks.
+6. [Towards relational hyperdimensional computing](docs/blog/06-relational-hdc.md):
+   the same data structures, encoded as hypervectors.
+
+Using it
+----
+
+The fork is not published; it keeps upstream's coordinates. Install it locally:
+
+```
+lein install
+```
+
+then depend on `[org.clojure/core.logic "1.1.0-SNAPSHOT"]` (or the
+`:mvn/version` equivalent). The map relations live in `clojure.core.logic`
+itself.
+
+Status: JVM only for now. The ClojureScript namespace does not have the
+map or vector relations yet.
+
+Changes from upstream
+----
+
+- `conjo` is a relation now, not a constraint that waits for two of its three
+  arguments. Run backwards on a map, it also finds the map whose value
+  `conj` overwrote: `(conjo p [:b 2] {:a 1 :b 2})` gives `p = {:a 1}` and
+  `p = {:a 1 :b _0}`. The variadic form `(conjo c x y ... out)` still works.
+- `geto` and `assoco` with an index as key, on a collection whose kind isn't
+  known yet, answer for both a map and a vector: `(run* [m] (geto m 0 1))`
+  gives `(lmap {0 1} | _0)` and `(lvec [1] | _0 | [])`.
+- Plain maps with logic variables as keys unify relationally; upstream
+  treated such keys as plain values.
+
+----
+
+Upstream README
+====
+
 core.logic
 ====
 
