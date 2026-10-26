@@ -225,9 +225,49 @@
   (let [v (walk s v)]
     (occurs-check-term v u s)))
 
+(declare check-map-keys)
+
+;; Maps the occurs check met whose keys are not plain values (see
+;; check-map-keys), per thread since the occurs check cannot return them,
+;; as [n map] where n is the value of keyed-maps-count after adding it.
+;; ext only looks at them when the count moved during its occurs check.
+(def ^:private keyed-maps-seen
+  (proxy [ThreadLocal] []
+    (initialValue [] (java.util.ArrayList.))))
+
+(def ^:private ^java.util.concurrent.atomic.AtomicLong keyed-maps-count
+  (java.util.concurrent.atomic.AtomicLong.))
+
+(defn- note-keyed-map [m]
+  (.add ^java.util.List (.get ^ThreadLocal keyed-maps-seen)
+        [(.incrementAndGet keyed-maps-count) m]))
+
+(defn- take-keyed-maps
+  "The maps noted on this thread since keyed-maps-count was n, forgetting
+   all noted maps."
+  [n]
+  (let [^java.util.List seen (.get ^ThreadLocal keyed-maps-seen)
+        maps (into [] (keep (fn [[i m]] (when (> i n) m))) seen)]
+    (.clear seen)
+    maps))
+
+(defn- ext-occurs-checked [s u v]
+  (let [n (.get keyed-maps-count)]
+    (if (occurs-check s u (if (subst-val? v) (:v v) v))
+      (do (when-not (clojure.core/== n (.get keyed-maps-count))
+            (take-keyed-maps n))
+          nil)
+      (let [s (ext-no-check s u v)]
+        (if (clojure.core/== n (.get keyed-maps-count))
+          s
+          (let [maps (take-keyed-maps n)]
+            (if (seq maps)
+              (check-map-keys s maps)
+              s)))))))
+
 (defn ext [s u v]
-  (if (and (:oc s) (occurs-check s u (if (subst-val? v) (:v v) v)))
-    nil
+  (if (:oc s)
+    (ext-occurs-checked s u v)
     (ext-no-check s u v)))
 
 (declare tree-term?)
@@ -626,6 +666,8 @@
 ;; =============================================================================
 ;; Logic Variables
 
+(declare lmap? lmap-entries lmap-rest lvec? lvec-join lvec-parts)
+
 (deftype LVar [id unique name oname hash meta]
   IVar
   clojure.lang.ILookup
@@ -813,6 +855,8 @@
   IUnifyTerms
   (unify-terms [u v s]
     (cond
+      (lvec? v) (unify-terms v u s)
+
       (sequential? v)
       (loop [u u v (seq v) s s]
         (if-not (nil? v)
@@ -876,9 +920,10 @@
 (defn lcons
   "Constructs a sequence a with an improper tail d if d is a logic variable."
   [a d]
-  (if (or (coll? d) (nil? d))
-    (cons a (seq d))
-    (LCons. a d -1 nil)))
+  (cond
+    (or (coll? d) (nil? d)) (cons a (seq d))
+    (lvec? d) (lvec-join [a] d [])
+    :else (LCons. a d -1 nil)))
 
 (defn lcons? [x]
   (instance? LCons x))
@@ -888,723 +933,6 @@
    tail. The tail is improper if the last argument is a logic variable."
   ([f s] `(lcons ~f ~s))
   ([f s & rest] `(lcons ~f (llist ~s ~@rest))))
-
-;; =============================================================================
-;; LMap - Relational Maps
-
-(declare lmap? lmap unify-lmaps)
-
-(deftype LMap [entries rest ^{:unsynchronized-mutable true :tag int} cache]
-  ITreeTerm
-
-  clojure.lang.IObj
-  (meta [this] nil)
-  (withMeta [this new-meta] this)
-
-  Object
-  (toString [this]
-    (if rest
-      (str "(lmap " entries " | " rest ")")
-      (str "(lmap " entries ")")))
-
-  (equals [this o]
-    (or (identical? this o)
-        (and (instance? LMap o)
-             (= entries (.entries ^LMap o))
-             (= rest (.rest ^LMap o)))))
-
-  (hashCode [this]
-    (if (clojure.core/== cache -1)
-      (do
-        (set! cache (unchecked-add-int
-                     (unchecked-multiply-int 31 (clojure.lang.Util/hash entries))
-                     (clojure.lang.Util/hash rest)))
-        cache)
-      cache))
-
-  IUnifyTerms
-  (unify-terms [u v s]
-    (cond
-      ;; Unify with concrete map
-      (and (map? v) (not (lmap? v)))
-      (let [uentries entries
-            urest rest]
-        ;; First: all known entries must match
-        (when-let [s (loop [ks (keys uentries) s s]
-                       (if (seq ks)
-                         (let [k (first ks)
-                               uv (get uentries k)
-                               vv (get v k ::not-found)]
-                           (if (= vv ::not-found)
-                             nil  ;; required key missing
-                             (when-let [s (unify s uv vv)]
-                               (recur (next ks) s))))
-                         s))]
-          ;; Second: handle rest
-          (if (nil? urest)
-            ;; Closed: v must have exactly the same keys
-            (when (= (set (keys uentries)) (set (keys v)))
-              s)
-            ;; Open: unify rest with remaining entries
-            (let [remaining (apply dissoc v (keys uentries))]
-              (unify s urest remaining)))))
-
-      ;; Unify with another LMap
-      (lmap? v)
-      (unify-lmaps u v s)
-
-      :else nil))
-
-  IReifyTerm
-  (reify-term [v s]
-    (let [s (loop [kvs (seq entries) s s]
-              (if kvs
-                (let [[k val] (first kvs)]
-                  (recur (next kvs) (-reify* (-reify* s k) val)))
-                s))]
-      (if rest
-        (-reify* s rest)
-        s)))
-
-  IWalkTerm
-  (walk-term [v f]
-    (LMap. (into {} (map (fn [[k val]] [(f k) (f val)]) entries))
-           (when rest (f rest))
-           -1))
-
-  IOccursCheckTerm
-  (occurs-check-term [v x s]
-    (or (some (fn [[k val]]
-                (or (occurs-check s x k)
-                    (occurs-check s x val)))
-              entries)
-        (and rest (occurs-check s x rest))))
-
-  IBuildTerm
-  (build-term [u s]
-    (let [s (loop [kvs (seq entries) s s]
-              (if kvs
-                (let [[k val] (first kvs)]
-                  (recur (next kvs) (build (build s k) val)))
-                s))]
-      (if rest
-        (build s rest)
-        s))))
-
-(defmethod print-method LMap [x ^Writer writer]
-  (.write writer (str x)))
-
-(defn lmap?
-  "Returns true if x is an LMap."
-  [x]
-  (instance? LMap x))
-
-(defn lmap
-  "Constructs a relational map. With one argument, creates a closed map.
-   With two arguments, creates an open map where rest represents unknown
-   additional entries."
-  ([entries] (lmap entries nil))
-  ([entries rest]
-   (if (and (nil? rest)
-            (not (some lvar? (vals entries)))
-            (not (some lvar? (keys entries))))
-     entries  ;; return plain map if fully ground and closed
-     (LMap. entries rest -1))))
-
-(defn lmap-entries
-  "Returns the known entries of an LMap, or the map itself if not an LMap."
-  [x]
-  (if (lmap? x) (.entries ^LMap x) x))
-
-(defn lmap-rest
-  "Returns the rest (unknown entries) of an LMap, or nil."
-  [x]
-  (if (lmap? x) (.rest ^LMap x) nil))
-
-(defn unify-lmaps
-  "Unifies two LMaps by merging their entries."
-  [u v s]
-  (let [u-entries (.entries ^LMap u)
-        v-entries (.entries ^LMap v)
-        u-rest (.rest ^LMap u)
-        v-rest (.rest ^LMap v)
-        all-keys (into #{} (concat (keys u-entries) (keys v-entries)))]
-    ;; Unify overlapping entries
-    (when-let [s (loop [ks (seq all-keys) s s]
-                   (if ks
-                     (let [k (first ks)
-                           uv (get u-entries k ::not-found)
-                           vv (get v-entries k ::not-found)]
-                       (if (and (not= uv ::not-found) (not= vv ::not-found))
-                         ;; Both have the key - unify values
-                         (when-let [s (unify s uv vv)]
-                           (recur (next ks) s))
-                         ;; Only one has it - that's fine
-                         (recur (next ks) s)))
-                     s))]
-      ;; Handle rests
-      (cond
-        ;; Both closed - success if we got here
-        (and (nil? u-rest) (nil? v-rest))
-        s
-
-        ;; Both open - create fresh rest, bind both rests
-        (and u-rest v-rest)
-        (let [new-rest (lvar 'rest)
-              ;; v's extra keys go to u-rest
-              v-only-keys (remove (set (keys u-entries)) (keys v-entries))
-              ;; u's extra keys go to v-rest
-              u-only-keys (remove (set (keys v-entries)) (keys u-entries))]
-          (when-let [s (unify s u-rest (lmap (select-keys v-entries v-only-keys) new-rest))]
-            (unify s v-rest (lmap (select-keys u-entries u-only-keys) new-rest))))
-
-        ;; Only u is open
-        u-rest
-        (let [v-only-keys (remove (set (keys u-entries)) (keys v-entries))]
-          (unify s u-rest (select-keys v-entries v-only-keys)))
-
-        ;; Only v is open
-        v-rest
-        (let [u-only-keys (remove (set (keys v-entries)) (keys u-entries))]
-          (unify s v-rest (select-keys u-entries u-only-keys)))))))
-
-(defn assoco
-  "A relation where out is (assoc m k v).
-   Works in multiple directions:
-   - Forward: m, k, v known → compute out
-   - Backward: out, k known → extract v and compute m
-   - With LMaps for partial information"
-  [m k v out]
-  (fn [s]
-    (let [m (walk s m)
-          k (walk s k)
-          v (walk s v)
-          out (walk s out)]
-      (cond
-        ;; Forward: m is concrete map, k and v are ground
-        (and (map? m) (not (lmap? m)) (not (lvar? k)))
-        (if (lvar? v)
-          ;; v unknown but we can still compute structure
-          ((== out (lmap (assoc m k v) nil)) s)
-          ;; all ground - compute directly
-          ((== out (assoc m k v)) s))
-
-        ;; Backward: out is concrete map, k is ground
-        (and (map? out) (not (lmap? out)) (not (lvar? k)))
-        (let [extracted-v (get out k ::not-found)]
-          (if (= extracted-v ::not-found)
-            nil  ;; k not in out, can't be result of assoc with k
-            ((all
-              (== v extracted-v)
-              (== m (dissoc out k))) s)))
-
-        ;; Query: both m and out are concrete maps, k is unknown
-        ;; Find what key was added/changed
-        (and (map? m) (not (lmap? m))
-             (map? out) (not (lmap? out))
-             (lvar? k))
-        (let [out-keys (keys out)
-              ;; For each key in out, check if (dissoc m k) = (dissoc out k)
-              ;; which would mean k is the key that was assoc'd
-              candidates (filter (fn [ck]
-                                   (= (dissoc m ck) (dissoc out ck)))
-                                 out-keys)]
-          (if (seq candidates)
-            ;; Create a disjunction of all candidates using or*
-            ((or* (map (fn [ck]
-                         (all (== k ck) (== v (get out ck))))
-                       candidates)) s)
-            nil))
-
-        ;; m is LMap
-        (lmap? m)
-        (let [entries (lmap-entries m)
-              rst (lmap-rest m)]
-          (if (lvar? k)
-            ;; k unknown - defer
-            nil
-            ;; k known - add to entries
-            ((== out (lmap (assoc entries k v) rst)) s)))
-
-        ;; out is LMap, k is ground - backward through LMap
-        (and (lmap? out) (not (lvar? k)))
-        (let [entries (lmap-entries out)
-              rst (lmap-rest out)
-              extracted-v (get entries k ::not-found)]
-          (if (= extracted-v ::not-found)
-            ;; k not in known entries - might be in rest
-            (if rst
-              ;; k could be in rest - complex case, defer for now
-              nil
-              ;; closed LMap without k - fail
-              nil)
-            ;; k in entries - extract
-            ((all
-              (== v extracted-v)
-              (== m (lmap (dissoc entries k) rst))) s)))
-
-        ;; Both m and out are lvars - use LMap constraint
-        (and (lvar? m) (lvar? out) (not (lvar? k)))
-        (let [rest-var (lvar 'rest)]
-          ((all
-            (== m (lmap {} rest-var))
-            (== out (lmap {k v} rest-var))) s))
-
-        ;; Can't proceed - would need to enumerate
-        :else nil))))
-
-(defn geto
-  "A relation where v is (get m k).
-   Works in multiple directions:
-   - Forward: m, k known → extract v
-   - Query k: m known, k unknown → enumerate all key-value pairs
-   - Query v: m known, v known, k unknown → find keys with that value
-   - With LMaps for partial information"
-  [m k v]
-  (fn [s]
-    (let [m (walk s m)
-          k (walk s k)
-          v (walk s v)]
-      (cond
-        ;; Forward: m is concrete map, k is ground
-        (and (map? m) (not (lmap? m)) (not (lvar? k)))
-        (let [result (get m k ::not-found)]
-          (if (= result ::not-found)
-            nil  ;; key not in map
-            ((== v result) s)))
-
-        ;; Query: m is concrete map, k is unknown - enumerate keys
-        (and (map? m) (not (lmap? m)) (lvar? k))
-        (let [entries (seq m)]
-          (if (seq entries)
-            ((or* (map (fn [[ek ev]]
-                         (all (== k ek) (== v ev)))
-                       entries)) s)
-            nil))
-
-        ;; m is LMap, k is ground
-        (and (lmap? m) (not (lvar? k)))
-        (let [entries (lmap-entries m)
-              rst (lmap-rest m)
-              result (get entries k ::not-found)]
-          (if (not= result ::not-found)
-            ;; Found in known entries
-            ((== v result) s)
-            ;; Not in known entries - might be in rest
-            (if rst
-              ;; Could be in rest - constrain rest to have this key
-              ((all
-                (== rst (lmap {k v} (lvar 'rest2)))) s)
-              ;; Closed LMap without key - fail
-              nil)))
-
-        ;; m is LMap, k is unknown - enumerate known entries
-        (and (lmap? m) (lvar? k))
-        (let [entries (lmap-entries m)]
-          (if (seq entries)
-            ((or* (map (fn [[ek ev]]
-                         (all (== k ek) (== v ev)))
-                       entries)) s)
-            ;; No known entries, can't enumerate
-            nil))
-
-        ;; m is unknown but we know k and v - constrain m
-        (and (lvar? m) (not (lvar? k)))
-        (let [rest-var (lvar 'rest)]
-          ((== m (lmap {k v} rest-var)) s))
-
-        ;; Can't proceed
-        :else nil))))
-
-(defn dissoco
-  "A relation where out is (dissoc m k).
-   Works in multiple directions:
-   - Forward: m, k known → compute out
-   - Backward: out, k known → m is out plus some value at k
-   - Query: m, out known → find what key was removed
-   - With LMaps for partial information"
-  [m k out]
-  (fn [s]
-    (let [m (walk s m)
-          k (walk s k)
-          out (walk s out)]
-      (cond
-        ;; Forward: m is concrete map, k is ground
-        (and (map? m) (not (lmap? m)) (not (lvar? k)))
-        ((== out (dissoc m k)) s)
-
-        ;; Backward: out is concrete map, k is ground
-        ;; m = out with k mapped to some unknown value
-        (and (map? out) (not (lmap? out)) (not (lvar? k)))
-        (let [v (lvar 'v)]
-          ((== m (assoc out k v)) s))
-
-        ;; Query: both m and out are concrete, k unknown
-        ;; Find what key was removed
-        (and (map? m) (not (lmap? m))
-             (map? out) (not (lmap? out))
-             (lvar? k))
-        (let [m-keys (set (keys m))
-              out-keys (set (keys out))
-              ;; Keys in m but not in out
-              removed-keys (clojure.set/difference m-keys out-keys)
-              ;; Valid candidates: keys where (dissoc m k) = out
-              valid-keys (filter #(= out (dissoc m %)) removed-keys)]
-          (if (seq valid-keys)
-            ((or* (map (fn [rk] (== k rk)) valid-keys)) s)
-            ;; No key was removed - could be dissoc of non-existent key
-            (when (= m out)
-              ;; Any key not in m would work, but can't enumerate
-              ;; For now, fail - need constraint to express "k not in m"
-              nil)))
-
-        ;; m is LMap, k is ground
-        (lmap? m)
-        (let [entries (lmap-entries m)
-              rst (lmap-rest m)]
-          ((== out (lmap (dissoc entries k) rst)) s))
-
-        ;; out is LMap, k is ground - backward
-        (and (lmap? out) (not (lvar? k)))
-        (let [entries (lmap-entries out)
-              rst (lmap-rest out)
-              v (lvar 'v)]
-          ((== m (lmap (assoc entries k v) rst)) s))
-
-        ;; m unknown, k and out known
-        (and (lvar? m) (not (lvar? k)))
-        (let [v (lvar 'v)]
-          (cond
-            (map? out) ((== m (assoc out k v)) s)
-            (lmap? out)
-            (let [entries (lmap-entries out)
-                  rst (lmap-rest out)]
-              ((== m (lmap (assoc entries k v) rst)) s))
-            :else nil))
-
-        ;; Can't proceed
-        :else nil))))
-
-(defn mergeo
-  "A relation where out is (merge m1 m2).
-   m2's values take precedence over m1's for overlapping keys.
-   Works in multiple directions:
-   - Forward: m1, m2 known → compute out
-   - Backward: out, m2 known → find possible m1
-   - Backward: out, m1 known → find possible m2
-   - With LMaps for partial information"
-  [m1 m2 out]
-  (fn [s]
-    (let [m1 (walk s m1)
-          m2 (walk s m2)
-          out (walk s out)]
-      (cond
-        ;; Forward: both m1 and m2 are concrete maps
-        (and (map? m1) (not (lmap? m1))
-             (map? m2) (not (lmap? m2)))
-        ((== out (merge m1 m2)) s)
-
-        ;; Backward: out and m2 concrete, find m1
-        ;; m1 can have any values for keys in m2 (they get overwritten)
-        ;; m1 must have the values from out for keys not in m2
-        (and (map? out) (not (lmap? out))
-             (map? m2) (not (lmap? m2))
-             (lvar? m1))
-        (let [m2-keys (set (keys m2))
-              ;; Keys only in out (not overwritten by m2)
-              m1-required (apply dissoc out (keys m2))
-              ;; Keys in both - m1 could have any value
-              overlap-keys (clojure.set/intersection (set (keys out)) m2-keys)
-              ;; Build m1 with required keys + unknown values for overlap
-              m1-base (reduce (fn [acc k]
-                                (assoc acc k (lvar (symbol (str "v-" (name k))))))
-                              m1-required
-                              overlap-keys)]
-          ;; m1 is at least m1-base, possibly with more keys via rest
-          ((== m1 (lmap m1-base (lvar 'rest1))) s))
-
-        ;; Backward: out and m1 concrete, find m2
-        ;; m2 must contain keys where out differs from m1, plus possibly more
-        (and (map? out) (not (lmap? out))
-             (map? m1) (not (lmap? m1))
-             (lvar? m2))
-        (let [;; Keys where out differs from m1 - m2 must have these
-              required-in-m2 (into {}
-                                   (filter (fn [[k v]]
-                                             (not= v (get m1 k ::not-in-m1)))
-                                           out))
-              ;; Keys in out that match m1 - m2 could override or not
-              matching-keys (filter (fn [k]
-                                      (= (get out k) (get m1 k)))
-                                    (keys out))]
-          ;; m2 has at least required-in-m2, possibly with more via rest
-          ((== m2 (lmap required-in-m2 (lvar 'rest2))) s))
-
-        ;; m1 is LMap, m2 concrete
-        (and (lmap? m1) (map? m2) (not (lmap? m2)))
-        (let [m1-entries (lmap-entries m1)
-              m1-rest (lmap-rest m1)]
-          ;; out = (merge m1-entries m1-rest m2)
-          ;; out has all of m2, plus m1-entries not in m2, plus m1-rest not in m2
-          (if m1-rest
-            ;; Open m1 - out is merge of known parts plus unknown rest contribution
-            (let [m1-contribution (apply dissoc m1-entries (keys m2))
-                  known-out (merge m1-contribution m2)]
-              ((== out (lmap known-out m1-rest)) s))
-            ;; Closed m1
-            ((== out (merge m1-entries m2)) s)))
-
-        ;; m1 concrete, m2 is LMap
-        (and (map? m1) (not (lmap? m1)) (lmap? m2))
-        (let [m2-entries (lmap-entries m2)
-              m2-rest (lmap-rest m2)]
-          (if m2-rest
-            ;; Open m2 - out has m1 overwritten by m2-entries, plus unknown from m2-rest
-            (let [known-out (merge m1 m2-entries)]
-              ((== out (lmap known-out m2-rest)) s))
-            ;; Closed m2
-            ((== out (merge m1 m2-entries)) s)))
-
-        ;; Both m1 and m2 are LMaps
-        (and (lmap? m1) (lmap? m2))
-        (let [m1-entries (lmap-entries m1)
-              m2-entries (lmap-entries m2)
-              m1-rest (lmap-rest m1)
-              m2-rest (lmap-rest m2)
-              known-merged (merge m1-entries m2-entries)]
-          (cond
-            ;; Both closed
-            (and (nil? m1-rest) (nil? m2-rest))
-            ((== out known-merged) s)
-
-            ;; m2 open (takes precedence)
-            m2-rest
-            ((== out (lmap known-merged m2-rest)) s)
-
-            ;; Only m1 open
-            m1-rest
-            (let [m1-contrib (apply dissoc m1-entries (keys m2-entries))]
-              ((== out (lmap (merge m1-contrib m2-entries) m1-rest)) s))))
-
-        ;; out is concrete, both m1 and m2 unknown - too many possibilities
-        ;; But we can set up a basic constraint
-        (and (map? out) (not (lmap? out))
-             (lvar? m1) (lvar? m2))
-        (let [rest1 (lvar 'rest1)
-              rest2 (lvar 'rest2)]
-          ;; m1 could be empty (all from m2), m2 could be out
-          ;; This is just one possibility - use LMaps for flexibility
-          ((all
-            (== m1 (lmap {} rest1))
-            (== m2 (lmap out rest2))) s))
-
-        ;; Can't proceed
-        :else nil))))
-
-(defn keyso
-  "A relation where ks is the sequence of keys in map m.
-   Works in multiple directions:
-   - Forward: m known → ks is (keys m)
-   - Membership: m known, ks is lvar → can enumerate/unify
-   - Backward: ks known → constrain m to have those keys
-   - With LMaps for partial information"
-  [m ks]
-  (fn [s]
-    (let [m (walk s m)
-          ks (walk s ks)]
-      (cond
-        ;; Forward: m is concrete map
-        (and (map? m) (not (lmap? m)))
-        ((== ks (seq (keys m))) s)
-
-        ;; m is LMap - get known keys
-        (lmap? m)
-        (let [entries (lmap-entries m)
-              rst (lmap-rest m)
-              known-keys (seq (keys entries))]
-          (if rst
-            ;; Open LMap - known keys plus unknown from rest
-            ;; Build llist: (k1 k2 ... . rest-keys)
-            (let [rest-keys (lvar 'rest-keys)]
-              (if known-keys
-                ((== ks (reduce (fn [acc k] (lcons k acc))
-                                rest-keys
-                                (reverse known-keys))) s)
-                ((== ks rest-keys) s)))
-            ;; Closed LMap
-            ((== ks known-keys) s)))
-
-        ;; Backward: ks is sequential, m is lvar
-        ;; Constrain m to have those keys (with unknown values)
-        (and (lvar? m) (sequential? ks))
-        (let [entries (into {} (map (fn [k] [k (lvar (symbol (str "v-" k)))]) ks))]
-          ((== m (lmap entries (lvar 'rest))) s))
-
-        ;; ks is lcons (logic list)
-        (and (lvar? m) (lcons? ks))
-        ;; Walk the lcons to get concrete keys if possible
-        (let [concrete-keys (loop [l ks acc []]
-                              (cond
-                                (nil? l) acc
-                                (lvar? l) nil  ;; can't proceed, tail unknown
-                                (lcons? l) (let [k (lfirst l)]
-                                             (if (lvar? k)
-                                               nil  ;; key unknown
-                                               (recur (lnext l) (conj acc k))))
-                                (sequential? l) (into acc l)
-                                :else nil))]
-          (if concrete-keys
-            (let [entries (into {} (map (fn [k] [k (lvar (symbol (str "v-" k)))]) concrete-keys))]
-              ((== m entries) s))
-            nil))
-
-        ;; Can't proceed
-        :else nil))))
-
-(defn valso
-  "A relation where vs is the sequence of values in map m.
-   Works in multiple directions:
-   - Forward: m known → vs is (vals m)
-   - Membership: check if value is in map
-   - Backward: vs known → constrain m to have those values
-   - With LMaps for partial information"
-  [m vs]
-  (fn [s]
-    (let [m (walk s m)
-          vs (walk s vs)]
-      (cond
-        ;; Forward: m is concrete map
-        (and (map? m) (not (lmap? m)))
-        ((== vs (seq (vals m))) s)
-
-        ;; m is LMap - get known values
-        (lmap? m)
-        (let [entries (lmap-entries m)
-              rst (lmap-rest m)
-              known-vals (seq (vals entries))]
-          (if rst
-            ;; Open LMap - known vals plus unknown from rest
-            ;; Build llist: (v1 v2 ... . rest-vals)
-            (let [rest-vals (lvar 'rest-vals)]
-              (if known-vals
-                ((== vs (reduce (fn [acc v] (lcons v acc))
-                                rest-vals
-                                (reverse known-vals))) s)
-                ((== vs rest-vals) s)))
-            ;; Closed LMap
-            ((== vs known-vals) s)))
-
-        ;; Backward: vs is sequential, m is lvar
-        ;; Constrain m to have those values (with generated keys)
-        (and (lvar? m) (sequential? vs))
-        (let [entries (into {} (map-indexed (fn [i v]
-                                              [(lvar (symbol (str "k-" i))) v])
-                                            vs))]
-          ((== m (lmap entries (lvar 'rest))) s))
-
-        ;; Can't proceed
-        :else nil))))
-
-(defn selectso
-  "A relation where out is (select-keys m ks).
-   Works in multiple directions:
-   - Forward: m, ks known → compute out
-   - Query ks: m, out known → find what keys were selected
-   - Backward: ks, out known → constrain m to have those keys
-   - With LMaps for partial information"
-  [m ks out]
-  (fn [s]
-    (let [m (walk s m)
-          ks (walk s ks)
-          out (walk s out)]
-      (cond
-        ;; Forward: m is concrete map, ks is concrete sequence
-        (and (map? m) (not (lmap? m)) (sequential? ks))
-        ((== out (select-keys m ks)) s)
-
-        ;; Forward: m is concrete, ks is lcons - extract concrete keys
-        (and (map? m) (not (lmap? m)) (lcons? ks))
-        (let [concrete-ks (loop [l ks acc []]
-                            (cond
-                              (nil? l) acc
-                              (lvar? l) nil
-                              (lcons? l) (let [k (lfirst l)]
-                                           (if (lvar? k)
-                                             nil
-                                             (recur (lnext l) (conj acc k))))
-                              (sequential? l) (into acc l)
-                              :else nil))]
-          (if concrete-ks
-            ((== out (select-keys m concrete-ks)) s)
-            nil))
-
-        ;; Query: m and out are concrete, ks unknown
-        ;; Find what keys produce out from m
-        (and (map? m) (not (lmap? m))
-             (map? out) (not (lmap? out))
-             (lvar? ks))
-        ;; ks must be exactly the keys in out (that exist in m)
-        (let [out-keys (keys out)
-              valid? (every? (fn [[k v]] (= (get m k) v)) out)]
-          (if valid?
-            ((== ks (seq out-keys)) s)
-            nil))
-
-        ;; Backward: ks and out are known, m is unknown
-        ;; m must have at least the keys in out with those values
-        (and (lvar? m) (sequential? ks)
-             (map? out) (not (lmap? out)))
-        ;; m has out's entries plus possibly more
-        ((== m (lmap out (lvar 'rest))) s)
-
-        ;; m is LMap, ks is concrete
-        (and (lmap? m) (sequential? ks))
-        (let [entries (lmap-entries m)
-              rst (lmap-rest m)
-              known-selected (select-keys entries ks)
-              ;; Keys in ks that aren't in known entries
-              unknown-ks (remove (set (keys entries)) ks)]
-          (if (and (nil? rst) (seq unknown-ks))
-            ;; Closed LMap missing some keys - those just won't be in result
-            ((== out known-selected) s)
-            (if (seq unknown-ks)
-              ;; Open LMap - some keys might be in rest
-              (let [rest-contribution (lvar 'rest-sel)]
-                ;; out = known-selected merged with selection from rest
-                ((== out (lmap known-selected rest-contribution)) s))
-              ;; All keys found in known entries
-              ((== out known-selected) s))))
-
-        ;; out is LMap - backward through LMap
-        (and (map? m) (not (lmap? m))
-             (lmap? out))
-        (let [out-entries (lmap-entries out)
-              out-rest (lmap-rest out)
-              ;; Verify known entries match
-              valid? (every? (fn [[k v]] (= (get m k) v)) out-entries)]
-          (if valid?
-            (if out-rest
-              ;; out-rest must be empty or subset of m
-              ((== out-rest {}) s)
-              s)
-            nil))
-
-        ;; Both m and out unknown, ks known
-        (and (lvar? m) (lvar? out) (sequential? ks))
-        (let [;; out has unknown values for each key in ks
-              out-entries (into {} (map (fn [k] [k (lvar (symbol (str "v-" k)))]) ks))]
-          ((all
-             ;; m has at least these entries
-            (== m (lmap out-entries (lvar 'rest-m)))
-             ;; out is exactly these entries
-            (== out out-entries)) s))
-
-        ;; Can't proceed
-        :else nil))))
-
-(defn tree-term? [x]
-  (or (coll? x)
-      (instance? ITreeTerm x)))
 
 ;; =============================================================================
 ;; Unification
@@ -1626,19 +954,34 @@
             nil)
           (if-not (nil? v) nil s))))
 
-    (lcons? v) (unify-terms v u s)
+    (or (lcons? v) (lvec? v)) (unify-terms v u s)
     :else nil))
+
+(defn atomic-key?
+  "True if the map key k is a plain value, i.e. not a logic var or a term
+   that may contain one. Such a key is ground and compares by value."
+  [k]
+  (not (or (instance? IVar k)
+           (instance? clojure.lang.IPersistentCollection k)
+           (instance? ITreeTerm k))))
+
+(declare unify-map-terms)
 
 (defn unify-with-map* [u v s]
   (when (clojure.core/== (count u) (count v))
     (loop [ks (keys u) s s]
       (if (seq ks)
-        (let [kf (first ks)
-              vf (get v kf ::not-found)]
-          (when-not (identical? vf ::not-found)
-            (if-let [s (unify s (get u kf) vf)]
-              (recur (next ks) s)
-              nil)))
+        (let [kf (first ks)]
+          (if (atomic-key? kf)
+            (let [vf (get v kf ::not-found)]
+              (if (identical? vf ::not-found)
+                ;; v may still have kf under a key that is not a plain value
+                (when-not (every? atomic-key? (keys v))
+                  (unify-map-terms u v s))
+                (if-let [s (unify s (get u kf) vf)]
+                  (recur (next ks) s)
+                  nil)))
+            (unify-map-terms u v s)))
         s))))
 
 (extend-protocol IUnifyTerms
@@ -1690,6 +1033,26 @@
 ;; =============================================================================
 ;; Walk Term
 
+;; Walking a map whose keys have become equal records it: such a term
+;; denotes no map, so reifyg drops the answer. Each collision gets a number
+;; from the global count, and the thread keeps its latest one, so reifyg
+;; only looks at the thread when the count moved.
+(def ^:private ^java.util.concurrent.atomic.AtomicLong map-key-collision-count
+  (java.util.concurrent.atomic.AtomicLong.))
+
+(def ^:private ^ThreadLocal map-key-collision (ThreadLocal.))
+
+(defn- map-keys-collided! []
+  (.set map-key-collision (.incrementAndGet map-key-collision-count)))
+
+(defn- map-keys-collided-since?
+  "True if walking on this thread met colliding map keys since the
+   collision count was n."
+  [n]
+  (and (not (clojure.core/== n (.get map-key-collision-count)))
+       (let [last (.get map-key-collision)]
+         (boolean (and last (> (long last) (long n)))))))
+
 (defn walk-record-term [v f]
   (with-meta
     (loop [v v r (-uninitialized v)]
@@ -1726,14 +1089,15 @@
   (walk-term [v f]
     (if (record? v)
       (walk-record-term v f)
-      (with-meta
-        (loop [v v r (transient {})]
-          (if (seq v)
-            (let [[vfk vfv] (first v)]
-              (recur (next v) (assoc! r (walk-term (f vfk) f)
-                                      (walk-term (f vfv) f))))
-            (persistent! r)))
-        (meta v))))
+      (let [r (loop [es v r (transient {})]
+                (if (seq es)
+                  (let [[vfk vfv] (first es)]
+                    (recur (next es) (assoc! r (walk-term (f vfk) f)
+                                             (walk-term (f vfv) f))))
+                  (persistent! r)))]
+        (when-not (clojure.core/== (count r) (count v))
+          (map-keys-collided!))
+        (with-meta r (meta v)))))
 
   clojure.lang.IRecord
   (walk-term [v f]
@@ -1755,6 +1119,20 @@
       (if (seq v)
         (or (occurs-check s x (first v))
             (recur (next v) x s))
+        false)))
+
+  clojure.lang.IPersistentMap
+  (occurs-check-term [v x s]
+    (loop [es (seq v) noted? false]
+      (if es
+        (let [[k val] (first es)
+              note? (and (not noted?) (not (atomic-key? k)))]
+          (when note?
+            ;; ext checks the keys of this map once it is bound
+            (note-keyed-map v))
+          (or (occurs-check s x k)
+              (occurs-check s x val)
+              (recur (next es) (or noted? note?))))
         false))))
 
 ;; =============================================================================
@@ -2160,11 +1538,17 @@
 ;; =============================================================================
 ;; copy-term
 
+(declare constrain-lmap-rests)
+
 (defn copy-term
   "Copies a term u into v. Non-relational."
   [u v]
   (project [u]
-           (== (walk* (build empty-s u) u) v)))
+           (let [c (walk* (build empty-s u) u)]
+             (all
+              (== c v)
+              ;; copied open maps have fresh rests, without their constraints
+              (fn [s] (constrain-lmap-rests s c))))))
 
 ;; =============================================================================
 ;; lvar nonlvar
@@ -2623,6 +2007,10 @@
     (let [v (walk this v)]
       (cond
         (lvar? v) (ext-no-check this v (lvar (count (:s this))))
+        (lmap? v) (-reify-tabled
+                   (-reify-tabled this (seq (lmap-entries v)))
+                   (lmap-rest v))
+        (lvec? v) (-reify-tabled this (lvec-parts v))
         (coll? v) (-reify-tabled
                    (-reify-tabled this (first v))
                    (next v))
@@ -2647,8 +2035,10 @@
                   [(make-suspended-stream cache start
                                           (fn [] (reuse this argv cache (:ansl @cache) (count start))))]
                   ;; we have answer terms to reuse in the cache
-                  (let [ans (first ansv*)]
-                    (Choice. (subunify this argv (reify-tabled this ans))
+                  (let [ans (reify-tabled this (first ansv*))
+                        s (subunify this argv ans)]
+                    ;; copied open maps have fresh rests, without their constraints
+                    (Choice. (when s (constrain-lmap-rests s ans))
                              (fn [] (reuse-loop (rest ansv*)))))))]
         (reuse-loop start))))
 
@@ -2895,16 +2285,24 @@
       (choice v empty-f)
       (choice `(~v :- ~@rcs) empty-f))))
 
+(declare lmap-force)
+
 (defn reifyg [x]
   (all
+   lmap-force
    (enforce-constraints x)
+   ;; labeling may have woken relations that are ambiguous again
+   lmap-force
    (fn [a]
-     (let [v (walk* a x)
-           r (-reify* (with-meta empty-s (meta a)) v)]
-       (if (zero? (count r))
-         (choice v empty-f)
-         (let [v (walk* r v)]
-           (reify-constraints v r a)))))))
+     (let [n (.get map-key-collision-count)
+           v (walk* a x)]
+       ;; two keys of a map in the answer became equal: it denotes no map
+       (when-not (map-keys-collided-since? n)
+         (let [r (-reify* (with-meta empty-s (meta a)) v)]
+           (if (zero? (count r))
+             (choice v empty-f)
+             (let [v (walk* r v)]
+               (reify-constraints v r a)))))))))
 
 (defn cgoal [c]
   (reify
@@ -3038,6 +2436,8 @@
   LCons
   (-disunify-terms [u v s cs]
     (cond
+      (lvec? v) (-disunify-terms v u s cs)
+
       (sequential? v)
       (loop [u u v (seq v) cs cs]
         (if-not (nil? v)
@@ -3068,7 +2468,7 @@
 
   clojure.lang.Sequential
   (-disunify-terms [u v s cs]
-    (if (lcons? v)
+    (if (or (lcons? v) (lvec? v))
       (-disunify-terms v u s cs)
       (if (sequential? v)
         (loop [u (seq u) v (seq v) cs cs]
@@ -3088,7 +2488,19 @@
 
   clojure.lang.IPersistentMap
   (-disunify-terms [u v s cs]
-    (if (and (map? v) (= (count u) (count v)))
+    (cond
+      (lmap? v)
+      (-disunify-terms v u s cs)
+
+      ;; which keys pair up is not known yet: keep the pair whole, the !=
+      ;; constraint rechecks it whenever one of its vars is bound
+      (and (map? v)
+           (not (and (every? atomic-key? (keys u))
+                     (every? atomic-key? (keys v)))))
+      (when (unify s u v)
+        (assoc cs :prefixc (assoc (:prefixc cs) u v)))
+
+      (and (map? v) (= (count u) (count v)))
       (loop [ks (seq (keys u)) cs cs]
         (if ks
           (let [kf (first ks)
@@ -3098,7 +2510,8 @@
                 (recur (next ks) cs)
                 nil)))
           cs))
-      nil)))
+
+      :else nil)))
 
 #_(defn prefix-subsumes? [p pp]
     (let [s (-> p meta :s)
@@ -3214,18 +2627,27 @@
 ;; =============================================================================
 ;; Partial Maps
 
-(declare featurec partial-map)
+(declare featurec partial-map unify-pmap-relational unify-pmap-with-lmap)
 
 (defn unify-with-pmap* [u v s]
   (loop [ks (keys u) s s]
     (if (seq ks)
       (let [kf (first ks)
-            vf (get v kf ::not-found)]
-        (if (= vf ::not-found)
+            vf (if (atomic-key? kf) (get v kf ::not-found) ::not-plain)]
+        (cond
+          ;; a key that is not a plain value, here or possibly in v
+          (or (identical? vf ::not-plain)
+              (and (identical? vf ::not-found)
+                   (not (every? atomic-key? (keys v)))))
+          (unify-pmap-relational u v s)
+
+          (identical? vf ::not-found)
           nil
+
+          :else
           (let [uf (get u kf)
                 vf (walk s vf)]
-            (if (lvar? vf)
+            (if (and (lvar? vf) (map? uf))
               (recur (next ks) ((featurec vf uf) s))
               (if (map? uf)
                 (if-let [s (unify s (partial-map uf) vf)]
@@ -3242,9 +2664,10 @@
 
   IUnifyTerms
   (unify-terms [u v s]
-    (if (map? v)
-      (unify-with-pmap* u v s)
-      nil))
+    (cond
+      (lmap? v) (unify-pmap-with-lmap u v s)
+      (map? v) (unify-with-pmap* u v s)
+      :else nil))
 
   IUnifyWithRecord
   (unify-with-record [u v s]
@@ -3521,10 +2944,7 @@
      IConstraintWatchedStores
      (-watched-stores [this] #{::subst}))))
 
-(defn conjo
-  "A constraint version of conj"
-  [coll & args]
-  (cgoal (-conjo coll (butlast args) (last args))))
+;; conjo itself is relational now, see the LVec section.
 
 ;; =============================================================================
 ;; Deep Constraint
@@ -3615,3 +3035,1842 @@
             :else fail))
         (fn [_ v _ r a]
           `(seqc ~(-reify a v r)))))
+
+;; =============================================================================
+;; LMap - Relational Maps
+;;
+;; Maps are relational in two ways:
+;;
+;; - Keys may be logic terms that are not ground yet. The keys of a map term
+;;   are pairwise distinct, so {k1 1 k2 2} denotes a map of two entries and
+;;   fails once k1 and k2 become equal. Unifying maps whose keys are not all
+;;   ground branches over which keys pair up.
+;;
+;; - An LMap is an open map: known entries plus a rest, a logic var standing
+;;   for the map of all other entries, disjoint from the known ones. LMaps
+;;   are only created by the relations below (lmapo, geto, ...), which
+;;   constrain each rest to lack the known keys (lacks-keyo) before anything
+;;   can bind it. Their keys are always ground; a map whose keys are not is
+;;   always closed, i.e. a plain map.
+;;
+;; The relations never fail just because too little is known yet. They
+;; branch over the possibilities, or suspend until more of their arguments
+;; are bound. A suspended relation that wakes up inside the constraint
+;; solver, or a branching unification, commits if exactly one alternative
+;; survives and otherwise stays pending; its alternatives are enumerated
+;; just before an answer is reified (see lmap-force). Relations still
+;; pending then appear in the answer as constraints, e.g. (geto _0 _1 1).
+;;
+;; Keeping map keys distinct is part of the occurs check: run and run* check
+;; every map they bind, run-nc only the maps it unifies, passes to a
+;; relation or returns in an answer.
+
+(declare lmap? lmap* lmap-picko lacks-keyo geto unify-pmap-with-lmap lmap-ensure-lacks)
+
+(deftype LMap [entries rest ^{:unsynchronized-mutable true :tag int} cache]
+  ITreeTerm
+
+  clojure.lang.IObj
+  (meta [this] nil)
+  (withMeta [this new-meta] this)
+
+  Object
+  (toString [this]
+    (str "(lmap " entries " | " rest ")"))
+
+  (equals [this o]
+    (or (identical? this o)
+        (and (instance? LMap o)
+             (= entries (.entries ^LMap o))
+             (= rest (.rest ^LMap o)))))
+
+  (hashCode [this]
+    (if (clojure.core/== cache -1)
+      (do
+        (set! cache (unchecked-add-int
+                     (unchecked-multiply-int 31 (clojure.lang.Util/hash entries))
+                     (clojure.lang.Util/hash rest)))
+        cache)
+      cache))
+
+  IUnifyTerms
+  (unify-terms [u v s]
+    (cond
+      (partial-map? v) (unify-pmap-with-lmap v u s)
+      (or (map? v) (lmap? v)) (unify-map-terms u v s)
+      :else nil))
+
+  IReifyTerm
+  (reify-term [v s]
+    (-reify* (loop [kvs (seq entries) s s]
+               (if kvs
+                 (let [[k val] (first kvs)]
+                   (recur (next kvs) (-reify* (-reify* s k) val)))
+                 s))
+             rest))
+
+  IWalkTerm
+  (walk-term [v f]
+    (let [es (into {} (map (fn [[k val]]
+                             [(walk-term (f k) f) (walk-term (f val) f)])
+                           entries))
+          r (walk-term (f rest) f)]
+      ;; a rest repeating a known key denotes no map
+      (when (and (map? r) (not (lmap? r))
+                 (some #(contains? es %) (keys r)))
+        (map-keys-collided!))
+      (lmap* es r)))
+
+  IOccursCheckTerm
+  (occurs-check-term [v x s]
+    (or (some (fn [[k val]]
+                (or (occurs-check s x k)
+                    (occurs-check s x val)))
+              entries)
+        (occurs-check s x rest)))
+
+  IBuildTerm
+  (build-term [u s]
+    (build (loop [kvs (seq entries) s s]
+             (if kvs
+               (let [[k val] (first kvs)]
+                 (recur (next kvs) (build (build s k) val)))
+               s))
+           rest)))
+
+(defmethod print-method LMap [x ^Writer writer]
+  (.write writer (str x)))
+
+(defn lmap?
+  "Returns true if x is an LMap, an open map in an answer."
+  [x]
+  (instance? LMap x))
+
+(defn lmap-entries
+  "Returns the known entries of an LMap, or the map itself if not an LMap."
+  [x]
+  (if (lmap? x) (.entries ^LMap x) x))
+
+(defn lmap-rest
+  "Returns the rest (unknown entries) of an LMap, or nil."
+  [x]
+  (if (lmap? x) (.rest ^LMap x) nil))
+
+(defn- lmap*
+  "Normal form of the map with the given entries and rest: a plain map if
+   rest is nil or a map, the rest itself if there are no entries, otherwise
+   an LMap whose rest is not itself a map."
+  [entries rest]
+  (cond
+    (nil? rest) entries
+    (lmap? rest) (recur (merge (.entries ^LMap rest) entries) (.rest ^LMap rest))
+    (map? rest) (merge rest entries)
+    (empty? entries) rest
+    :else (LMap. entries rest -1)))
+
+(defn- ground-key?
+  "True if the fully walked term k contains no unbound logic var."
+  [k]
+  (cond
+    (lvar? k) false
+    (lcons? k) (and (ground-key? (lfirst k)) (ground-key? (lnext k)))
+    (lmap? k) false
+    (map? k) (every? (fn [[a b]] (and (ground-key? a) (ground-key? b))) k)
+    (coll? k) (every? ground-key? k)
+    :else true))
+
+(defn- term-vars
+  "The unbound vars in the terms ts."
+  [s ts]
+  (vec (recover-vars-from-term (walk* s (vec ts)))))
+
+;; -----------------------------------------------------------------------------
+;; Distinct keys
+
+(declare map-parts)
+
+(defn- -map-keysc
+  "Constraint that the keys of map m stay pairwise distinct, rechecked
+   whenever one of the vars in watch is bound."
+  [m watch]
+  (with-meta
+    (reify
+      IConstraintStep
+      (-step [this s]
+        (reify
+          clojure.lang.IFn
+          (invoke [_ s]
+            ;; map-parts fails on equal keys and re-adds this constraint
+            ;; for keys that are still not ground
+            (when-let [s ((remcg this) s)]
+              (first (map-parts s m))))
+          IRunnable
+          (-runnable? [_]
+            (boolean (some #(not (lvar? (walk s %))) watch)))))
+      IConstraintOp
+      (-rator [_] `distincto)
+      (-rands [_] watch)
+      IReifiableConstraint
+      (-reifyc [_ v r a]
+        ;; implied when the map itself is part of the answer
+        (let [m' (walk* r (walk* a m))]
+          (when-not (some #(= m' %) (tree-seq coll? seq v))
+            `(distincto ~(vec (keys m'))))))
+      IConstraintWatchedStores
+      (-watched-stores [_] #{::subst}))
+    {::map-keys m}))
+
+(defn- ensure-distinct-keys
+  "Constrains the keys of map m to stay distinct, unless that is already
+   done. Takes and returns a substitution."
+  [s m]
+  (let [watch (term-vars s (keys m))
+        cs (:cs s)
+        done? (some (fn [cid]
+                      (identical? m (::map-keys (meta ((:cm cs) cid)))))
+                    (get (:km cs) (root-var s (first watch))))]
+    (if done?
+      s
+      ((cgoal (-map-keysc m watch)) s))))
+
+;; Maps grown one key at a time through their rests form chains, which
+;; every later walk would follow again. Once walked, the var holding such a
+;; chain is rebound to the equal flat map, which keeps repeated lookups on a
+;; growing map from turning quadratic.
+(defn- compress-map
+  "Rebinds the var x, whose map spans more than one link, to the flat map
+   term. Takes and returns a substitution."
+  [s x links term]
+  (if (and (> links 1) (lvar? x))
+    (let [root (root-var s x)
+          sm (:s s)]
+      (if (lmap? (get sm root))
+        (assoc s :s (assoc sm root term))
+        s))
+    s))
+
+(defn- map-parts
+  "Walks x in s and splits the map it denotes into [s ground nonground tail]:
+   the entries with ground keys (a map), the entries whose keys are not
+   ground yet (a vector of pairs), and the open tail, an unbound var or nil
+   for a closed map. An unbound x is a map with nothing known. Returns nil
+   if x is not a map or two of its keys are equal."
+  [s x0]
+  (letfn [(add-ground [g es]
+            ;; disjoint union, without copying either map when possible
+            (cond
+              (empty? g) es
+              (empty? es) g
+              (< (count g) (count es))
+              (when (not-any? #(contains? es %) (keys g)) (merge es g))
+              :else
+              (when (not-any? #(contains? g %) (keys es)) (merge g es))))]
+    (loop [s s x (walk s x0) g {} links 0]
+      (cond
+        (lvar? x) [(compress-map s x0 links (lmap* g x)) g [] x]
+        (lmap? x) (when-let [g (add-ground g (.entries ^LMap x))]
+                    (recur s (walk s (.rest ^LMap x)) g (inc links)))
+        (map? x) (if (every? atomic-key? (keys x))
+                   (when-let [g (add-ground g x)]
+                     [(compress-map s x0 links g) g [] nil])
+                   (let [es (map (fn [[k v]] [(walk* s k) v]) x)
+                         ground (filter (comp ground-key? first) es)
+                         nonground (vec (remove (comp ground-key? first) es))
+                         g' (into {} ground)]
+                     (when (and (clojure.core/== (count g') (count ground))
+                                (= (count nonground) (count (distinct (map first nonground)))))
+                       (when-let [g (add-ground g g')]
+                         (if (and (seq nonground) (> (count x) 1))
+                           (when-let [s (ensure-distinct-keys s x)]
+                             [s g nonground nil])
+                           [s g nonground nil])))))
+        :else nil))))
+
+(defn- map-term
+  "The map term with ground entries g, nonground entries n and tail."
+  [g n tail]
+  (if (seq n)
+    (into g n)
+    (lmap* g tail)))
+
+(defn- map-term-without
+  "The map term [g n tail] without the entry for key k."
+  [g n tail k]
+  (if (contains? g k)
+    (map-term (dissoc g k) n tail)
+    (map-term g (vec (remove #(= k (first %)) n)) tail)))
+
+(defn constrain-lmap-rests
+  "Constrains the rest of every open map in the term t to lack the map's
+   known keys, for open maps copied with fresh rests (tabling, copy-term).
+   Takes and returns a substitution."
+  [s t]
+  (letfn [(walk-into [s t]
+            (cond
+              (nil? s) nil
+              (lmap? t) (let [s (reduce (fn [s [k v]] (walk-into (walk-into s k) v))
+                                        s (.entries ^LMap t))
+                              r (.rest ^LMap t)]
+                          (if (and s (lvar? (walk s r)))
+                            (lmap-ensure-lacks s (walk s r) (keys (.entries ^LMap t)))
+                            s))
+              (lcons? t) (walk-into (walk-into s (lfirst t)) (lnext t))
+              (coll? t) (reduce walk-into s t)
+              :else s))]
+    (walk-into s t)))
+
+(defn- check-map-keys
+  "Checks the keys of maps that were just bound and are not all plain
+   values: fails if two are equal, and keeps them distinct from now on."
+  [s maps]
+  (reduce (fn [s m] (or (first (map-parts s m)) (reduced nil))) s maps))
+
+;; -----------------------------------------------------------------------------
+;; Absent keys
+
+(declare lmap-lacks lmap-lacks-ground)
+
+(defn- lmap-lacks-constraint
+  "The lacks-constraint on the var x, if any. There is at most one."
+  [s x]
+  (let [cs (:cs s)
+        cm (:cm cs)]
+    (some (fn [cid]
+            (let [c (cm cid)]
+              (when (::lmap-lacks (meta c)) c)))
+          (get (:km cs) (root-var s x)))))
+
+(defn- lmap-implied-keys
+  "The keys that reified answer v already shows to be absent from the var
+   reified as sym: the entries of every LMap in v whose rest is sym."
+  [v sym]
+  (letfn [(implied [acc t]
+            (cond
+              (lmap? t) (let [acc (reduce implied acc (vals (.entries ^LMap t)))]
+                          (if (= (.rest ^LMap t) sym)
+                            (into acc (keys (.entries ^LMap t)))
+                            acc))
+              (map? t) (reduce implied acc (vals t))
+              (coll? t) (reduce implied acc t)
+              :else acc))]
+    (implied #{} v)))
+
+(defn- -lmap-lacksc
+  "Constraint that the map the var x gets bound to has none of the ground
+   keys ks."
+  [x ks]
+  (with-meta
+    (reify
+      IConstraintStep
+      (-step [this s]
+        (reify
+          clojure.lang.IFn
+          (invoke [_ s]
+            ((composeg (remcg this) (lmap-lacks-ground x ks)) s))
+          IRunnable
+          (-runnable? [_]
+            (not (lvar? (walk s x))))))
+      IConstraintOp
+      (-rator [_] `lacks-keyo)
+      (-rands [_] [x])
+      IReifiableConstraint
+      (-reifyc [_ v r a]
+        ;; hide what the answer already shows, e.g. the rest of (lmap {:a 1} | _0)
+        ;; lacks :a, and constraints on vars that are not part of the answer
+        (let [sym (walk* r (walk* a x))]
+          (when-not (lvar? sym)
+            (when-let [shown (seq (remove (lmap-implied-keys v sym) ks))]
+              `(lacks-keyo ~sym ~@shown)))))
+      IConstraintWatchedStores
+      (-watched-stores [_] #{::subst}))
+    {::lmap-lacks ks}))
+
+(defn- lmap-ensure-lacks
+  "Constrains the unbound var x to lack the ground keys ks. Keeps a single
+   lacks-constraint per var, so a rest that is passed along keeps sharing
+   one key set instead of collecting constraints. Takes and returns a
+   substitution."
+  [s x ks]
+  (let [ks (if (set? ks) ks (set ks))
+        c (lmap-lacks-constraint s x)
+        have (::lmap-lacks (meta c))]
+    (cond
+      (nil? c) ((cgoal (-lmap-lacksc x ks)) s)
+      ;; grow the larger set by the smaller one
+      (> (count ks) (count have))
+      ((cgoal (-lmap-lacksc x (into ks have))) ((remcg c) s))
+      (every? #(contains? have %) ks) s
+      :else
+      ((cgoal (-lmap-lacksc x (into have ks))) ((remcg c) s)))))
+
+(declare lmap-await)
+
+(defn- lmap-lacks-ground
+  "A goal that succeeds if the map x has none of the keys in the set ks,
+   which are ground. Never branches."
+  [x ks]
+  (fn [s]
+    (when-let [[s g n tail] (map-parts s x)]
+      (when-not (if (< (count g) (count ks))
+                  (some #(contains? ks %) (keys g))
+                  (some #(contains? g %) ks))
+        ;; differ from the keys of x that are not ground
+        (when-let [s (reduce (fn [s [k nk]] (or ((!= k nk) s) (reduced nil)))
+                             s (for [[nk] n, k ks] [k nk]))]
+          (if (and tail (seq ks))
+            (lmap-ensure-lacks s tail ks)
+            s))))))
+
+(defn- lmap-lacks
+  "A goal that succeeds if the map x has none of the keys ks. Never
+   branches, so it can run inside the constraint solver."
+  [x ks]
+  (fn [s]
+    (let [ks (map #(walk* s %) ks)
+          ground (set (filter ground-key? ks))
+          nonground (remove ground-key? ks)]
+      (if (empty? nonground)
+        ((lmap-lacks-ground x ground) s)
+        (when-let [[s g n tail] (map-parts s x)]
+          (let [goals (concat
+                       ;; differ from the keys of x that are not ground
+                       (for [k nonground, [nk] n] (!= k nk))
+                       ;; and from its ground keys and rest, once ground
+                       (when (or (seq g) tail)
+                         (for [k nonground]
+                           (lmap-await `lacks-keyo [x k] k #(lmap-lacks x [k])))))]
+            (when-let [s (reduce (fn [s g] (or (g s) (reduced nil))) s goals)]
+              ((lmap-lacks-ground x ground) s))))))))
+
+(defn- lmap-extendo
+  "A goal where map x is the entries, whose keys are ground, plus the map r,
+   which lacks those keys."
+  [x entries r]
+  (all
+   (lmap-lacks r (keys entries))
+   ;; build on what r is bound to, so maps grown step by step stay flat
+   ;; instead of becoming chains of rests
+   (fn [s] ((== x (lmap* entries (walk s r))) s))))
+
+;; -----------------------------------------------------------------------------
+;; Suspension
+
+(defn- lmap-take
+  "Up to n answers of the goal result stream x."
+  [n x]
+  (loop [x x acc []]
+    (cond
+      (or (nil? x) (clojure.core/== (count acc) n)) acc
+      (instance? Choice x) (recur (.f ^Choice x) (conj acc (.a ^Choice x)))
+      (fn? x) (recur (x) acc)
+      :else (conj acc x))))
+
+(defn- lmap-solve
+  "Up to two answers of the goal (retry) on s. Runs it as a goal of its own,
+   so that the constraints it triggers are fully propagated, then restores
+   what s was in the middle of."
+  [s retry]
+  (let [vs (:vs s)
+        cq (:cq s)]
+    (mapv #(-> % (assoc :vs vs) (assoc :cq cq))
+          (lmap-take 2 ((retry) (-> s (assoc :vs nil) (assoc :cq nil)))))))
+
+(declare -lmap-relc)
+
+(defn- lmap-pend
+  "Adds the relation rel on args as a pending constraint that re-runs the
+   goal (retry) when one of the vars in watch-terms is bound. A nil rel is
+   hidden from answers. info is kept with the constraint: :force, returning
+   the goal that enumerates an ambiguous relation (retry by default), or
+   :link and :lin-eq for lengths."
+  ([s rel args retry watch-terms ambiguous?]
+   (lmap-pend s rel args retry watch-terms ambiguous? nil))
+  ([s rel args retry watch-terms ambiguous? info]
+   ((cgoal (-lmap-relc rel args retry (term-vars s watch-terms) ambiguous? info)) s)))
+
+(defn- lmap-commit
+  "Runs the goal (retry) where branching is not possible: fails if no
+   alternative survives, commits if exactly one does, and otherwise keeps
+   the relation pending as ambiguous."
+  ([s rel args retry]
+   (lmap-commit s rel args retry nil))
+  ([s rel args retry info]
+   (let [answers (lmap-solve s retry)]
+     (case (count answers)
+       0 nil
+       1 (first answers)
+       (lmap-pend s rel args retry args true info)))))
+
+(defn- -lmap-relc
+  "Constraint for the relation rel on args, suspended until one of the vars
+   in watch is bound. retry returns the relation's goal."
+  [rel args retry watch ambiguous? info]
+  (with-meta
+    (reify
+      IConstraintStep
+      (-step [this s]
+        (reify
+          clojure.lang.IFn
+          (invoke [_ s]
+            (when-let [s ((remcg this) s)]
+              (lmap-commit s rel args retry info)))
+          IRunnable
+          (-runnable? [_]
+            (boolean (some #(not (lvar? (walk s %))) watch)))))
+      IConstraintOp
+      (-rator [_] rel)
+      (-rands [_] watch)
+      IReifiableConstraint
+      (-reifyc [_ v r a]
+        (when rel
+          (cons rel (-reify a args r))))
+      IConstraintWatchedStores
+      (-watched-stores [_] #{::subst}))
+    {::lmap-rel (merge {:ambiguous ambiguous? :retry retry} info)}))
+
+(defn- lmap-suspend
+  "A goal suspending the relation rel on args until a var in watch-terms is
+   bound, then re-running the goal (retry)."
+  [rel args retry watch-terms]
+  (fn [s]
+    (lmap-pend s rel args retry watch-terms false)))
+
+(defn- lmap-await
+  "A goal that runs the goal (g) once x is ground, suspending until then."
+  [rel args x g]
+  (fn [s]
+    (if (ground-key? (walk* s x))
+      ((g) s)
+      ((lmap-suspend rel args #(lmap-await rel args x g) [x]) s))))
+
+(declare len-force-goal)
+
+(defn- lmap-force
+  "A goal enumerating the alternatives of ambiguous pending relations, and
+   the lengths still tied to other lengths, until none are left. Runs
+   before an answer is reified."
+  [a]
+  (let [info #(::lmap-rel (meta %))]
+    (if-let [c (when (pos? (count (:cs a)))
+                 (first (filter #(:ambiguous (info %)) (vals (:cm (:cs a))))))]
+      ((all
+        (remcg c)
+        ((or (:force (info c)) (:retry (info c))))
+        lmap-force) a)
+      (if-let [g (len-force-goal a)]
+        ((all g lmap-force) a)
+        a))))
+
+(defn- or-goals
+  "Disjunction of goals, failing if there are none. Builds each
+   alternative only when it is tried, so goals may be long or lazy."
+  [goals]
+  (if-let [[g & more] (seq goals)]
+    (if more
+      (conde
+       [g]
+       [(or-goals more)])
+      g)
+    fail))
+
+;; -----------------------------------------------------------------------------
+;; Picking an entry
+
+(defn- lmap-picko
+  "A relation where map t is the map t' plus key k with value x, and t'
+   lacks k. Enumerates the entries of t if k is not ground. A nil t' means
+   the remainder is not wanted, which saves building it. While it waits, it
+   reifies as the relation rel on args."
+  [t k x t' rel args]
+  (fn [s]
+    (when-let [[s g n tail] (map-parts s t)]
+      (let [k' (walk* s k)
+            retry #(lmap-picko t k x t' rel args)
+            remainder (fn [k]
+                        (if t'
+                          (fn [s] ((== t' (map-term-without g n tail k)) s))
+                          succeed))]
+        (cond
+          ;; nothing known about t
+          (lvar? (walk s t))
+          (if (ground-key? k')
+            ((lmap-extendo t {k' x} (or t' (lvar 'rest))) s)
+            ;; a key that is not ground fits only into a closed map
+            (let [[_ g' n' tail' :as parts'] (map-parts s (or t' (lvar 'rest)))]
+              (cond
+                (nil? parts') nil
+                (nil? tail') ((all (lmap-lacks t' [k'])
+                                   (== t (assoc (map-term g' n' nil) k' x)))
+                              s)
+                :else ((lmap-suspend rel args retry [t k t']) s))))
+
+          (and (ground-key? k') (contains? g k'))
+          ((all (== x (get g k'))
+                (remainder k'))
+           s)
+
+          :else
+          ((or-goals
+            (concat
+             ;; one of the known entries
+             (for [[ek ev] (concat (if (ground-key? k') [] g) n)]
+               (all (== k ek)
+                    (== x ev)
+                    (remainder ek)))
+             ;; or an entry of the unknown rest
+             (when tail
+               [(fresh [tail']
+                       (everyg #(!= k %) (if (ground-key? k') [] (keys g)))
+                       (lmap-picko tail k x (when t' tail') rel args)
+                       (if t' (lmap-extendo t' g tail') succeed))])))
+           s))))))
+
+(defn- lmap-pick-each
+  "A relation where map m is the entries es (pairs, keys distinct) plus the
+   map rest, which lacks their keys. Picks one entry at a time."
+  [es rest m rel args]
+  (if-let [[[k x] & more] (seq es)]
+    (fresh [m']
+      (lmap-picko m k x m' rel args)
+      (lmap-pick-each more rest m' rel args))
+    (== m rest)))
+
+(defn- lmap-take-ground
+  "A relation where map m is the entries g, whose keys are ground, plus the
+   map m', which lacks their keys. Takes them in one pass where it can."
+  [m g m' rel args]
+  (fn [s]
+    (if (empty? g)
+      ((== m m') s)
+      (when-let [[s gm nm tail] (map-parts s m)]
+        (if (lvar? (walk s m))
+          ((lmap-extendo m g m') s)
+          (let [present (filter #(contains? gm (key %)) g)
+                missing (into {} (remove #(contains? gm (key %)) g))
+                left (map-term (apply dissoc gm (map key present)) nm tail)]
+            ((all
+              (== (mapv val present) (mapv #(get gm (key %)) present))
+              (cond
+                (empty? missing) (== m' left)
+                ;; may be under a key of m that is not ground yet
+                (seq nm) (lmap-pick-each (seq missing) m' left rel args)
+                tail (fresh [tail']
+                       (lmap-extendo tail missing tail')
+                       (lmap-extendo m' (apply dissoc gm (map key present)) tail'))
+                :else fail))
+             s)))))))
+
+(defn- lmap-matcho
+  "A relation where map m is the entries es (pairs, keys distinct) plus the
+   map rest, which lacks their keys."
+  [es rest m rel args]
+  (let [ground (into {} (filter (comp ground-key? first) es))
+        nonground (remove (comp ground-key? first) es)]
+    (fresh [m']
+      (lmap-take-ground m ground m' rel args)
+      (lmap-pick-each nonground rest m' rel args))))
+
+(defn- walk-keys
+  "The entries of map es, with their keys walked."
+  [s es]
+  (map (fn [[k v]] [(walk* s k) v]) es))
+
+;; -----------------------------------------------------------------------------
+;; Unification
+
+(defn- unify-map-parts
+  "Unifies two maps given as ground entries and tails."
+  [gu tu gv tv s]
+  (when-let [s (reduce (fn [s [k x]]
+                         (if (contains? gv k)
+                           (or (unify s x (get gv k)) (reduced nil))
+                           s))
+                       s gu)]
+    (let [only-u (apply dissoc gu (keys gv))
+          only-v (apply dissoc gv (keys gu))]
+      (cond
+        (and (nil? tu) (nil? tv))
+        (when (and (empty? only-u) (empty? only-v)) s)
+
+        (nil? tu)
+        (when (empty? only-v) (unify s tv only-u))
+
+        (nil? tv)
+        (when (empty? only-u) (unify s tu only-v))
+
+        ;; same rest on both sides: the known keys must be the same too
+        (= tu tv)
+        (when (and (empty? only-u) (empty? only-v)) s)
+
+        ;; each rest holds the other side's extra entries plus a shared rest
+        :else
+        (let [r (lvar 'rest)]
+          (when-let [s (lmap-ensure-lacks s r (into (set (keys gu)) (keys gv)))]
+            (when-let [s (unify s tu (lmap* only-v r))]
+              (unify s tv (lmap* only-u r)))))))))
+
+(defn- map-unifyo
+  "A relation where the map terms u and v are equal, for maps whose keys
+   are not all ground."
+  [u v]
+  (fn [s]
+    (when-let [[s g n tail] (map-parts s u)]
+      ((lmap-matcho (concat g n) (or tail {}) v `== [u v]) s))))
+
+(defn unify-map-terms
+  "Unifies two map terms (plain maps or LMaps). If not all keys are ground,
+   the unification branches over which keys pair up."
+  [u v s]
+  (when-let [[s gu nu tu] (map-parts s u)]
+    (when-let [[s gv nv tv] (map-parts s v)]
+      (if (or (seq nu) (seq nv))
+        (lmap-commit s `== [u v] #(map-unifyo u v))
+        (unify-map-parts gu tu gv tv s)))))
+
+(defn- pmap-matcho
+  "A relation where map v has all the entries of the partial map u, whose
+   map values are partial too."
+  [u v]
+  (everyg (fn [[k x]]
+            (fresh [y]
+                   (geto v k y)
+                   (if (map? x) (featurec y x) (== x y))))
+          (seq u)))
+
+(defn- unify-pmap-relational
+  "Unifies the partial map u with the map term v, branching over which keys
+   pair up."
+  [u v s]
+  (lmap-commit s `featurec [v (into {} u)] #(pmap-matcho u v)))
+
+(defn- unify-pmap-with-lmap
+  "Unifies the partial map u with the LMap v: v must have all keys of u,
+   with unifying values."
+  [u v s]
+  (when-let [[s g n tail] (map-parts s v)]
+    (if (or (seq n) (not (every? atomic-key? (keys u))))
+      (unify-pmap-relational u v s)
+      (let [missing (remove #(contains? g %) (keys u))]
+        (when-let [s (cond
+                       (empty? missing) s
+                       tail (let [r (lvar 'rest)
+                                  added (zipmap missing (repeatedly #(lvar 'v)))]
+                              (when-let [s (lmap-ensure-lacks s r (into (set (keys g)) missing))]
+                                (unify s tail (lmap* added r))))
+                       :else nil)]
+          (when-let [[s g] (map-parts s v)]
+            (unify-with-pmap* u g s)))))))
+
+(extend-protocol IDisunifyTerms
+  LMap
+  (-disunify-terms [u v s cs]
+    ;; keep the whole pair in the prefix rather than decomposing it, since
+    ;; unifying open maps introduces fresh vars; the != constraint rechecks
+    ;; the pair whenever one of its vars is bound
+    (when (and (or (map? v) (lmap? v)) (unify s u v))
+      (assoc cs :prefixc (assoc (:prefixc cs) u v)))))
+
+;; -----------------------------------------------------------------------------
+;; Relations
+
+(defn lmapo
+  "A relation where map m consists of the entries of the map entries plus
+   the map rest, which has none of their keys. The keys of entries may be
+   unbound. (lmapo m {:a x} r) takes m apart into the value at :a and the
+   rest of m, or builds m from them."
+  [m entries rest]
+  (fn [s]
+    ((lmap-matcho (walk-keys s entries) rest m `lmapo [m entries rest]) s)))
+
+(defn lacks-keyo
+  "A relation where map m has none of the keys ks."
+  [m & ks]
+  (lmap-lacks m ks))
+
+(declare coll-kind index? seq-splito seq-assoco)
+
+(defn- key-kind
+  "The kind of collection the key k' alone says a collection must be, see
+   coll-kind: a key that is not an index can only be in a map; :either for
+   an index."
+  [k']
+  (cond
+    (lvar? k') nil
+    (index? k') :either
+    :else :map))
+
+(defn geto
+  "A relation where m contains key k with value v, i.e. (get m k) is v.
+   m is a map, or a sequence and k an index. Enumerates the entries of m if
+   k is unbound."
+  [m k v]
+  (fn [s]
+    (let [k' (walk* s k)
+          m' (walk s m)]
+      (cond
+        (and (map? m') (atomic-key? k') (contains? m' k'))
+        ;; the key itself is in the map, so no other key can be it
+        ((== v (get m' k')) s)
+
+        (and (vector? m') (index? k'))
+        (when (< k' (count m'))
+          ((== v (nth m' k')) s))
+
+        :else
+        (let [args [m k v]
+              as-map #(lmap-picko m k v nil `geto args)
+              as-seq #(seq-splito m k nil v nil `geto args)]
+          (case (or (coll-kind s m') (key-kind k'))
+            :map ((as-map) s)
+            :seq (when (or (lvar? k') (index? k')) ((as-seq) s))
+            :other nil
+            :either (lmap-pend s `geto args #(geto m k v) [m k] true
+                               {:force #(conde [(as-map)] [(as-seq)])})
+            ((lmap-suspend `geto args #(geto m k v) [m k]) s)))))))
+
+(defn dissoco
+  "A relation where out is (dissoc m k)."
+  [m k out]
+  (conde
+   [(fresh [x] (lmap-picko m k x out `dissoco [m k out]))]
+   [(lacks-keyo m k) (== m out)]))
+
+(defn- map-assoco [m k v out]
+  (fresh [m']
+         (dissoco m k m')
+         (lmap-picko out k v m' `assoco [m k v out])))
+
+(defn assoco
+  "A relation where out is (assoc m k v). m is a map, or a sequence and k
+   an index up to its length."
+  [m k v out]
+  (fn [s]
+    (let [k' (walk* s k)
+          args [m k v out]]
+      (case (or (coll-kind s m) (coll-kind s out) (key-kind k'))
+        :map ((map-assoco m k v out) s)
+        :seq (when (or (lvar? k') (index? k')) ((seq-assoco m k v out) s))
+        :other nil
+        :either (lmap-pend s `assoco args #(assoco m k v out) [m k out] true
+                           {:force #(conde [(map-assoco m k v out)]
+                                           [(seq-assoco m k v out)])})
+        ((lmap-suspend `assoco args #(assoco m k v out) [m k out]) s)))))
+
+(defn- lmap-assoc-all
+  "A relation where out is m with all entries es assoc'ed."
+  [m es out]
+  (if-let [[[k v] & more] (seq es)]
+    (fresh [m']
+           (assoco m k v m')
+           (lmap-assoc-all m' more out))
+    (== m out)))
+
+(defn- lmap-merge-into
+  "A relation where out is (merge es m), es being entries with distinct keys."
+  [es m out rel args]
+  (if-let [[[k v] & more] (seq es)]
+    (conde
+     [(fresh [x] (geto m k x)) (lmap-merge-into more m out rel args)]
+     [(lacks-keyo m k)
+      (fresh [out']
+             (lmap-merge-into more m out' rel args)
+             (lmap-picko out k v out' rel args))])
+    (== m out)))
+
+(defn- lmap-submapo
+  "A relation where the closed map m consists of some of the entries es."
+  [m es rel args]
+  (if-let [[[k v] & more] (seq es)]
+    (conde
+     [(fresh [r] (lmap-picko m k v r rel args) (lmap-submapo r more rel args))]
+     [(lacks-keyo m k) (lmap-submapo m more rel args)])
+    (== m {})))
+
+(defn mergeo
+  "A relation where out is (merge m1 m2). Branches once m2, m1 or out is
+   closed, and waits otherwise."
+  [m1 m2 out]
+  (fn [s]
+    (let [args [m1 m2 out]]
+      (when-let [[s g2 n2 t2] (map-parts s m2)]
+        (if (nil? t2)
+          (let [[_ g1 n1 t1] (map-parts s m1)]
+            (if (and (nil? t1) (empty? n1) (empty? n2) (map? (walk s m1)))
+              ;; both closed with ground keys: just merge
+              ((== out (merge g1 g2)) s)
+              ((lmap-assoc-all m1 (concat g2 n2) out) s)))
+          (when-let [[s g1 n1 t1] (map-parts s m1)]
+            (if (nil? t1)
+              ((lmap-merge-into (concat g1 n1) m2 out `mergeo args) s)
+              (when-let [[s go no to] (map-parts s out)]
+                (if (nil? to)
+                  ;; m2 is a submap of out; closing it lets mergeo proceed
+                  ((all (lmap-submapo m2 (concat go no) `mergeo args)
+                        (mergeo m1 m2 out))
+                   s)
+                  ((lmap-suspend `mergeo args #(mergeo m1 m2 out) args) s))))))))))
+
+(defn- lmap-list
+  "The elements of l if it is a proper list, else nil."
+  [s l]
+  (loop [l (walk s l) acc []]
+    (cond
+      (or (nil? l) (and (sequential? l) (empty? l))) acc
+      (lcons? l) (recur (walk s (lnext l)) (conj acc (lfirst l)))
+      (sequential? l) (into acc l)
+      :else nil)))
+
+(defn- lmap-permutationo
+  "A relation where the proper list ys holds the elements of the list xs in
+   some order. Compares directly when both are ground, and otherwise removes
+   the elements of ys from xs one at a time, so it only branches where an
+   element is not ground yet."
+  [s xs ys]
+  (let [xs' (map #(walk* s %) xs)
+        ys' (map #(walk* s %) ys)]
+    (cond
+      (not (clojure.core/== (count xs') (count ys'))) fail
+      (and (every? ground-key? xs') (every? ground-key? ys'))
+      (if (= (frequencies xs') (frequencies ys')) succeed fail)
+      :else
+      ((fn remove-each [xs ys]
+         (if-let [[y & more] (seq ys)]
+           (fresh [xs*]
+             (rembero y xs xs*)
+             (remove-each xs* more))
+           (== xs ())))
+       (or (seq xs) ()) ys))))
+
+(defn keyso
+  "A relation where ks is a list of the keys of map m, in any order. Lists
+   every ordering if ks is unbound."
+  [m ks]
+  (fn [s]
+    (when-let [[s g n tail] (map-parts s m)]
+      (if (nil? tail)
+        (let [all-keys (concat (keys g) (map first n))]
+          (if-let [kl (lmap-list s ks)]
+            ((lmap-permutationo s all-keys kl) s)
+            ((permuteo (or (seq all-keys) ()) ks) s)))
+        (if-let [kl (lmap-list s ks)]
+          (let [kl (map #(walk* s %) kl)]
+            ;; the same term twice cannot be two distinct keys
+            (when (= (count kl) (count (distinct kl)))
+              ((lmapo m (zipmap kl (repeatedly #(lvar 'v))) {}) s)))
+          ((lmap-suspend `keyso [m ks] #(keyso m ks) [m ks]) s))))))
+
+(defn- lmap-remove-each
+  "A relation where the list l without one occurrence of each of xs is out."
+  [xs l out]
+  (if-let [[x & more] (seq xs)]
+    (fresh [l']
+      (rembero x l l')
+      (lmap-remove-each more l' out))
+    (== l out)))
+
+(defn valso
+  "A relation where vs is a list of the values of map m, in any order.
+   Lists every ordering if vs is unbound."
+  [m vs]
+  (fn [s]
+    (when-let [[s g n tail] (map-parts s m)]
+      (if (nil? tail)
+        (let [all-vals (concat (vals g) (map second n))]
+          (if-let [vl (lmap-list s vs)]
+            ((lmap-permutationo s all-vals vl) s)
+            ((permuteo (or (seq all-vals) ()) vs) s)))
+        (if-let [vl (lmap-list s vs)]
+          (let [unknown (- (count vl) (count g))
+                xs (vec (repeatedly unknown #(lvar 'v)))]
+            ;; the rest holds the values left over, under keys that are not
+            ;; known, so taking them in the order of vs loses no answer
+            (when-not (neg? unknown)
+              ((all (lmap-remove-each (vals g) vs xs)
+                    (lmapo tail (zipmap (repeatedly unknown #(lvar 'k)) xs) {}))
+               s)))
+          ((lmap-suspend `valso [m vs] #(valso m vs) [m vs]) s))))))
+
+(defn- lmap-select
+  "A relation where out is (select-keys m ks); seen are the keys already
+   selected."
+  [m ks seen out rel args]
+  (if-let [[k & more] (seq ks)]
+    (conde
+     ;; the same key again selects nothing new
+     [(membero k seen) (lmap-select m more seen out rel args)]
+     [(everyg #(!= k %) seen)
+      (conde
+       [(fresh [x out']
+               (geto m k x)
+               (lmap-picko out k x out' rel args)
+               (lmap-select m more (conj seen k) out' rel args))]
+       [(lacks-keyo m k)
+        (lmap-select m more (conj seen k) out rel args)])])
+    (== out {})))
+
+(defn- lmap-covering-keys
+  "A relation where ks is a list holding each of the keys missing at least
+   once, any of the keys of out again, and any keys m lacks, in any order."
+  [m out-keys missing ks]
+  (conde
+   [(== ks ()) (if (empty? missing) succeed fail)]
+   [(fresh [k more]
+           (== ks (lcons k more))
+           (conde
+            [(membero k out-keys)
+             (fn [s]
+               (let [k (walk* s k)]
+                 ((lmap-covering-keys m out-keys (remove #(= k %) missing) more) s)))]
+            [(lacks-keyo m k)
+             (lmap-covering-keys m out-keys missing more)]))]))
+
+(defn selectso
+  "A relation where out is (select-keys m ks). If ks is unbound, lists every
+   key list that selects out from m: the keys of out in any order and
+   repeated, mixed with any keys m lacks. There are infinitely many, so use
+   run n rather than run* then."
+  [m ks out]
+  (fn [s]
+    (let [args [m ks out]]
+      (if-let [kl (lmap-list s ks)]
+        ((lmap-select m kl [] out `selectso args) s)
+        (let [[_ _ _ tm :as pm] (map-parts s m)
+              [_ go no to :as po] (map-parts s out)]
+          (cond
+            (or (nil? pm) (nil? po)) nil
+            (and (nil? tm) (nil? to))
+            (let [out-entries (concat go no)
+                  out-keys (map first out-entries)]
+              ((all
+                (everyg (fn [[k x]] (geto m k x)) out-entries)
+                (lmap-covering-keys m out-keys out-keys ks))
+               s))
+            :else ((lmap-suspend `selectso args #(selectso m ks out) args) s)))))))
+
+;; =============================================================================
+;; LVec - Relational Vectors
+;;
+;; Sequences are relational like maps. A sequence that is only partly known
+;; is an LVec: known elements at the front, an unknown middle, a logic var
+;; standing for a sequence of any length, and known elements at the back.
+;; Vectors, lists and partial lists (lcons) are sequences too, and all of
+;; them unify with each other, as they are = in Clojure. LVecs are built by
+;; the relations below and by unification, and appear in answers as
+;; (lvec [front] | middle | [back]).
+;;
+;; Every middle has a length: a logic var, linked to the middle by a hidden
+;; constraint created when the length is first needed (see mid-len). Lengths
+;; are natural numbers, related by linear equations that are solved exactly
+;; as soon as they are posted (see len==), so that sequences whose lengths
+;; cannot match fail without enumerating anything. When the length of a
+;; middle becomes known, the middle becomes a vector of that many fresh
+;; vars. Before an answer is reified, every length still tied to other
+;; lengths is enumerated (see len-force-goal); a middle whose length is tied
+;; to nothing stays open in the answer.
+
+;; -----------------------------------------------------------------------------
+;; Lengths
+
+(declare ->lin lin-plus lin-scale len==)
+
+(deftype Lin [terms const]
+  ;; terms maps each var to its nonzero coefficient
+  ITreeTerm
+
+  Object
+  (toString [_]
+    (str "(lin " terms " " const ")"))
+  (equals [this o]
+    (and (instance? Lin o)
+         (= terms (.terms ^Lin o))
+         (= const (.const ^Lin o))))
+  (hashCode [_]
+    (clojure.lang.Util/hash [terms const]))
+
+  IUnifyTerms
+  (unify-terms [u v s]
+    (len== s u v))
+
+  IWalkTerm
+  (walk-term [v f]
+    (reduce (fn [acc [x c]]
+              (lin-plus acc (lin-scale (->lin (walk-term (f x) f)) c)))
+            (Lin. {} const) terms))
+
+  IOccursCheckTerm
+  (occurs-check-term [v x s]
+    (boolean (some #(occurs-check s x %) (keys terms))))
+
+  IReifyTerm
+  (reify-term [v s]
+    (reduce -reify* s (keys terms)))
+
+  IBuildTerm
+  (build-term [u s]
+    (reduce build s (keys terms))))
+
+(defmethod print-method Lin [x ^Writer writer]
+  (.write writer (str x)))
+
+(defn- ->lin
+  "The linear expression for a natural number, a var or an expression."
+  [x]
+  (cond
+    (instance? Lin x) x
+    (lvar? x) (Lin. {x 1} 0)
+    (integer? x) (Lin. {} (long x))
+    :else nil))
+
+(defn- lin-terms [^Lin l] (.terms l))
+
+(defn- lin-const [^Lin l] (.const l))
+
+(defn- lin-plus [^Lin a ^Lin b]
+  (Lin. (reduce (fn [ts [x c]]
+                  (let [c (+ (get ts x 0) c)]
+                    (if (zero? c) (dissoc ts x) (assoc ts x c))))
+                (.terms a) (.terms b))
+        (+ (.const a) (.const b))))
+
+(defn- lin-scale [^Lin a k]
+  (if (zero? k)
+    (Lin. {} 0)
+    (Lin. (into {} (map (fn [[x c]] [x (* c k)])) (.terms a))
+          (* (.const a) k))))
+
+(defn- lin-walk
+  "The linear expression x denotes in s, over unbound vars only."
+  [s x]
+  (->lin (walk* s x)))
+
+(defn- lin-bound
+  "The upper bound on the var y implied by l >= 0 over the naturals, or nil."
+  [l y]
+  (let [ts (lin-terms l)
+        a (get ts y)]
+    (when (and a (neg? a) (not-any? pos? (vals ts)))
+      (quot (lin-const l) (- a)))))
+
+(defn- gcd [a b]
+  (if (zero? b) a (recur b (rem a b))))
+
+(defn- updateg
+  "A goal applying f to the substitution, then running the constraints on
+   the vars f bound, as == does."
+  [f]
+  (fn [a]
+    (when-let [ap (f (assoc a :vs []))]
+      (let [vs (:vs ap)]
+        (if (seq vs)
+          ((run-constraints* vs (:cs ap) ::subst) (assoc ap :vs nil))
+          (assoc ap :vs nil))))))
+
+(defn- len==
+  "Equates the lengths a and b: naturals, length vars, or linear
+   expressions over them. Solves for one var where it can, and keeps the
+   equation as a constraint otherwise. Takes and returns a substitution."
+  [s a b]
+  (let [la (lin-walk s a)
+        lb (lin-walk s b)]
+    (when (and la lb)
+      (let [d (lin-plus la (lin-scale lb -1))
+            ts (lin-terms d)
+            c (lin-const d)]
+        (if (empty? ts)
+          (when (zero? c) s)
+          (let [g (reduce gcd (map #(Math/abs (long %)) (vals ts)))]
+            (when (zero? (rem c g))
+              (let [d (if (clojure.core/== g 1)
+                        d
+                        (Lin. (into {} (map (fn [[x k]] [x (quot k g)])) ts)
+                              (quot c g)))
+                    ts (lin-terms d)
+                    c (lin-const d)
+                    signs (set (map pos? (vals ts)))]
+                ;; a sum of naturals with one sign never meets a constant of
+                ;; the same sign
+                (when-not (and (clojure.core/== (count signs) 1)
+                               (if (contains? signs true) (pos? c) (neg? c)))
+                  (if-let [[x k] (first (filter #(clojure.core/== 1 (Math/abs (long (val %)))) ts))]
+                    ;; k x + rest = 0, so x = -k rest
+                    (let [e (lin-scale (Lin. (dissoc ts x) c) (- k))]
+                      (if (empty? (lin-terms e))
+                        (when-not (neg? (lin-const e))
+                          (ext s x (lin-const e)))
+                        (ext s x e)))
+                    (lmap-pend s nil [d] #(updateg (fn [s] (len== s d 0))) [d] false
+                               {:lin-eq d})))))))))))
+
+(defn- len=g
+  "A goal equating the lengths a and b."
+  [a b]
+  (updateg #(len== % a b)))
+
+(defn- nat-enumg
+  "A goal enumerating (g k), (g (inc k)), ... up to hi, without end if hi
+   is nil."
+  [g k hi]
+  (if (and hi (> k hi))
+    fail
+    (conde
+     [(g k)]
+     [(nat-enumg g (inc k) hi)])))
+
+(defn- nat-enum
+  "A goal enumerating the naturals from k to hi as values of the length var y."
+  [y k hi]
+  (nat-enumg #(len=g y %) k hi))
+
+;; -----------------------------------------------------------------------------
+;; The LVec term
+
+(declare lvec-join unify-seqs)
+
+(deftype LVec [front mid back ^{:unsynchronized-mutable true :tag int} cache]
+  ITreeTerm
+
+  clojure.lang.IObj
+  (meta [this] nil)
+  (withMeta [this new-meta] this)
+
+  Object
+  (toString [this]
+    (str "(lvec " front " | " mid " | " back ")"))
+
+  (equals [this o]
+    (or (identical? this o)
+        (and (instance? LVec o)
+             (= front (.front ^LVec o))
+             (= mid (.mid ^LVec o))
+             (= back (.back ^LVec o)))))
+
+  (hashCode [this]
+    (if (clojure.core/== cache -1)
+      (do
+        (set! cache (int (clojure.lang.Util/hash [front mid back])))
+        cache)
+      cache))
+
+  IUnifyTerms
+  (unify-terms [u v s]
+    (unify-seqs u v s))
+
+  IReifyTerm
+  (reify-term [v s]
+    (reduce -reify* (-reify* (reduce -reify* s front) mid) back))
+
+  IWalkTerm
+  (walk-term [v f]
+    (lvec-join (mapv #(walk-term (f %) f) front)
+               (walk-term (f mid) f)
+               (mapv #(walk-term (f %) f) back)))
+
+  IOccursCheckTerm
+  (occurs-check-term [v x s]
+    (boolean (or (some #(occurs-check s x %) front)
+                 (occurs-check s x mid)
+                 (some #(occurs-check s x %) back))))
+
+  IBuildTerm
+  (build-term [u s]
+    (reduce build (build (reduce build s front) mid) back)))
+
+(defmethod print-method LVec [x ^Writer writer]
+  (.write writer (str x)))
+
+(defn lvec?
+  "Returns true if x is an LVec, a partly known sequence in an answer."
+  [x]
+  (instance? LVec x))
+
+(defn- lvec-parts
+  "The front, middle and back of the LVec v."
+  [^LVec v]
+  [(.front v) (.mid v) (.back v)])
+
+(defn- lvec*
+  "Normal form of the sequence front, then mid, then back: a vector if mid
+   is nil, mid itself if there is nothing around it, otherwise an LVec."
+  [front mid back]
+  (cond
+    (nil? mid) (into front back)
+    (and (empty? front) (empty? back)) mid
+    :else (LVec. front mid back -1)))
+
+(defn- seq-parts*
+  "Splits the sequence x into [front mid back], walking with walkf: the
+   known elements at the front, the unknown middle (an unbound var, or nil
+   if the sequence is closed), and the known elements at the back. An
+   unbound x is a sequence with nothing known. Returns nil if x is not a
+   sequence."
+  [walkf x]
+  (loop [x (walkf x) front [] back []]
+    (cond
+      (lvar? x) [front x back]
+      (lvec? x) (recur (walkf (.mid ^LVec x))
+                       (into front (.front ^LVec x))
+                       (into (.back ^LVec x) back))
+      (lcons? x) (let [[front t] (loop [x x front front]
+                                   (if (lcons? x)
+                                     (recur (walkf (lnext x)) (conj front (lfirst x)))
+                                     [front x]))]
+                   ;; a partial list ending in nil is a proper list
+                   (recur (if (nil? t) [] t) front back))
+      (sequential? x) [(if (and (vector? x) (empty? front) (empty? back))
+                         x
+                         (-> front (into x) (into back)))
+                       nil []]
+      :else nil)))
+
+(defn- seq-parts
+  "Walks x in s and splits the sequence it denotes into [front mid back],
+   see seq-parts*."
+  [s x]
+  (seq-parts* #(walk s %) x))
+
+(defn- lvec-join
+  "The sequence front, then the sequence m, then back."
+  [front m back]
+  (if-let [[f m' b] (seq-parts* identity m)]
+    (lvec* (into front f) m' (into b back))
+    (LVec. front m back -1)))
+
+;; -----------------------------------------------------------------------------
+;; Lengths of middles
+
+(declare mid-len)
+
+(defn- mid-len-link
+  "The length var linked to the middle m, an unbound var, if any."
+  [s m]
+  (let [cs (:cs s)
+        cm (:cm cs)]
+    (some (fn [cid]
+            (when-let [[_ L] (:link (::lmap-rel (meta (cm cid))))]
+              L))
+          (get (:km cs) (root-var s m)))))
+
+(defn- seq-len
+  "The length of the sequence x as [s l], l a linear expression, or nil if
+   x is not a sequence."
+  [s x]
+  (when-let [[f m b] (seq-parts s x)]
+    (let [k (+ (count f) (count b))]
+      (if m
+        (let [[s L] (mid-len s m)]
+          [s (lin-plus (->lin L) (->lin k))])
+        [s (->lin k)]))))
+
+(defn- lin-nonneg
+  "Checks that l >= 0 can hold over the naturals, and binds its vars to 0
+   where only that makes it hold. Returns a substitution or nil."
+  [s l]
+  (let [ts (lin-terms l)
+        c (lin-const l)]
+    (cond
+      (some pos? (vals ts)) s
+      (neg? c) nil
+      (zero? c) ((updateg (fn [s]
+                            (reduce (fn [s y] (or (len== s y 0) (reduced nil)))
+                                    s (keys ts))))
+                 s)
+      :else s)))
+
+(defn- mid-linkg
+  "A goal keeping the middle m and its length L in step: once L is known, m
+   is that many fresh vars, and once m is bound, L is its length."
+  [m L]
+  (fn [s]
+    (let [v (walk s m)]
+      (if (lvar? v)
+        (let [l (lin-walk s L)]
+          (cond
+            (nil? l) nil
+
+            (empty? (lin-terms l))
+            (let [n (lin-const l)]
+              (when-not (neg? n)
+                ((== m (vec (repeatedly n lvar))) s)))
+
+            :else
+            (let [s' (lin-nonneg s l)]
+              (cond
+                (nil? s') nil
+                (identical? s' s) (lmap-pend s nil [m L] #(mid-linkg m L) [m L] false
+                                             {:link [m L]})
+                :else ((mid-linkg m L) s')))))
+        (when-let [[s l] (seq-len s v)]
+          ((len=g L l) s))))))
+
+(defn- mid-len
+  "The length var of the middle m, an unbound var, as [s L]. Links a new
+   one to m if it has none yet."
+  [s m]
+  (if-let [L (mid-len-link s m)]
+    [s L]
+    (let [L (lvar 'len)]
+      [(lmap-pend s nil [m L] #(mid-linkg m L) [m L] false {:link [m L]}) L])))
+
+(defn- len-exprs
+  "The linear expressions that must stay >= 0 in a and still have vars: the
+   lengths of open middles that are tied to other lengths, and both sides
+   of the length equations that could not be solved yet."
+  [a]
+  (let [cs (:cs a)]
+    (when (pos? (count cs))
+      (mapcat (fn [c]
+                (let [{[m L] :link eq :lin-eq} (::lmap-rel (meta c))]
+                  (cond
+                    L (when (and (lvar? (walk a m)) (not (lvar? (walk a L))))
+                        (let [l (lin-walk a L)]
+                          (when (seq (lin-terms l)) [l])))
+                    eq (let [l (lin-walk a eq)]
+                         [l (lin-scale l -1)])
+                    :else nil)))
+              (vals (:cm cs))))))
+
+(defn- len-bound
+  "The least upper bound on the var y that the expressions exprs imply."
+  [exprs y]
+  (reduce (fn [hi l]
+            (if-let [b (lin-bound l y)]
+              (if hi (min hi b) b)
+              hi))
+          nil exprs))
+
+(defn- len-force-goal
+  "A goal enumerating one length still tied to other lengths in a, or nil
+   if there is none. Runs before an answer is reified."
+  [a]
+  (let [exprs (len-exprs a)]
+    (when-let [y (some #(first (keys (lin-terms %))) exprs)]
+      (nat-enum y 0 (len-bound exprs y)))))
+
+(defn- len-enumg
+  "A goal enumerating the values of the length l in s, through its first var."
+  [l]
+  (fn [a]
+    (let [l (lin-walk a l)]
+      (if-let [y (first (keys (lin-terms l)))]
+        ((nat-enum y 0 (len-bound (len-exprs a) y)) a)
+        a))))
+
+;; -----------------------------------------------------------------------------
+;; Unification
+
+(defn- unify-all
+  "Unifies the terms of xs and ys pairwise."
+  [s xs ys]
+  (loop [s s xs (seq xs) ys (seq ys)]
+    (if (and s xs)
+      (recur (unify s (first xs) (first ys)) (next xs) (next ys))
+      s)))
+
+(defn- unify-closed-open
+  "Unifies the closed sequence e with the sequence front, then the middle
+   m, then back."
+  [s e front m back]
+  (let [n (count e)
+        k (count front)
+        j (count back)]
+    (when (<= (+ k j) n)
+      (some-> s
+              (unify-all front (subvec e 0 k))
+              (unify-all back (subvec e (- n j)))
+              (unify m (subvec e k (- n j)))))))
+
+(defn- overlap-alts
+  "A relation where x, then the elements bs, is the elements fs, then y:
+   x either covers all of fs or ends within them."
+  [x bs fs y]
+  (let [nf (count fs)
+        nb (count bs)]
+    (or-goals
+     (cons
+      (fresh [z]
+             (== x (lvec* fs z []))
+             (== y (lvec* [] z bs)))
+      (for [i (range nf)
+            :let [r (- nf i)]
+            :when (<= r nb)]
+        (all
+         (== x (subvec fs 0 i))
+         (== (subvec fs i) (subvec bs 0 r))
+         (== y (subvec bs r))))))))
+
+(defn- unify-middles
+  "Unifies f1, then m1, then b1 with f2, then m2, then b2, after equal
+   elements were taken off both ends: f1 or f2 is empty, and b1 or b2 is."
+  [s u v f1 m1 b1 f2 m2 b2]
+  (cond
+    (= m1 m2)
+    (cond
+      (and (empty? f1) (empty? b1) (empty? f2) (empty? b2)) s
+      (not (clojure.core/== (+ (count f1) (count b1)) (+ (count f2) (count b2)))) nil
+      ;; m1 with elements around it equal to itself with others around it: a
+      ;; word equation, decided by enumerating the length of m1 at the end
+      :else (lmap-pend s `== [u v] #(== u v) [u v] true
+                       {:force #(fresh []
+                                       (fn [a] (when-let [[a l] (seq-len a m1)]
+                                                 ((len-enumg l) a)))
+                                       (== u v))}))
+    (and (empty? f1) (empty? b1)) (unify s m1 (lvec* f2 m2 b2))
+    (and (empty? f2) (empty? b2)) (unify s m2 (lvec* f1 m1 b1))
+    :else
+    ;; x, then bs, is fs, then y
+    (let [[x bs fs y] (if (seq f1) [m2 b2 f1 m1] [m1 b1 f2 m2])]
+      (when-let [[s lx] (seq-len s x)]
+        (when-let [[s ly] (seq-len s y)]
+          (when-let [s (len== s (lin-plus lx (->lin (count bs)))
+                              (lin-plus ly (->lin (count fs))))]
+            (lmap-commit s `== [u v] #(overlap-alts x bs fs y))))))))
+
+(defn- unify-seqs
+  "Unifies the sequence terms u and v."
+  [u v s]
+  (let [pu (seq-parts s u)
+        pv (seq-parts s v)]
+    (when (and pu pv)
+      (let [[f1 m1 b1] pu
+            [f2 m2 b2] pv]
+        (cond
+          (and (nil? m1) (nil? m2))
+          (when (clojure.core/== (count f1) (count f2))
+            (unify-all s f1 f2))
+
+          (nil? m1) (unify-closed-open s f1 f2 m2 b2)
+          (nil? m2) (unify-closed-open s f2 f1 m1 b1)
+
+          :else
+          (let [k (min (count f1) (count f2))
+                j (min (count b1) (count b2))
+                n1 (count b1)
+                n2 (count b2)]
+            (when-let [s (some-> s
+                                 (unify-all (subvec f1 0 k) (subvec f2 0 k))
+                                 (unify-all (subvec b1 (- n1 j)) (subvec b2 (- n2 j))))]
+              (let [f1 (subvec f1 k)
+                    f2 (subvec f2 k)
+                    b1 (subvec b1 0 (- n1 j))
+                    b2 (subvec b2 0 (- n2 j))]
+                (if (or (not (lvar? (walk s m1))) (not (lvar? (walk s m2))))
+                  ;; unifying elements bound a middle: start over
+                  (unify s (lvec* f1 m1 b1) (lvec* f2 m2 b2))
+                  (unify-middles s u v f1 (walk s m1) b1 f2 (walk s m2) b2))))))))))
+
+;; -----------------------------------------------------------------------------
+;; Splitting a sequence at a position
+
+(defn- seq-split-at
+  "A relation where sequence v is pre, then x, then post, where pre has n
+   elements, n a natural. A nil pre or post is not wanted."
+  [v n pre x post rel args]
+  (fn [s]
+    (when-let [[f m b] (seq-parts s v)]
+      (let [nf (count f)
+            pre-is #(if pre (== pre %) succeed)
+            post-is #(if post (== post %) succeed)]
+        (cond
+          (< n nf)
+          ((all (== x (nth f n))
+                (pre-is (subvec f 0 n))
+                (post-is (lvec* (subvec f (inc n)) m b)))
+           s)
+
+          (nil? m) nil
+
+          :else
+          (let [j (- n nf)]
+            (lmap-commit
+             s rel args
+             #(or-goals
+               (cons
+                ;; within the middle
+                (fresh [m']
+                       (fn [s]
+                         (let [ys (vec (repeatedly j lvar))]
+                           ((all (== m (lvec* (conj ys x) m' []))
+                                 (pre-is (into f ys))
+                                 (post-is (lvec* [] m' b)))
+                            s))))
+                ;; within the back, the middle having j - t elements
+                (for [t (range (min (count b) (inc j)))]
+                  (fn [s]
+                    (let [ys (vec (repeatedly (- j t) lvar))]
+                      ((all (== m ys)
+                            (== x (nth b t))
+                            (pre-is (-> f (into ys) (into (subvec b 0 t))))
+                            (post-is (subvec b (inc t))))
+                       s)))))))))))))
+
+(defn- seq-split-from
+  "seq-split-at for every position i from k on."
+  [v i k pre x post rel args]
+  (conde
+   [(== i k) (seq-split-at v k pre x post rel args)]
+   [(seq-split-from v i (inc k) pre x post rel args)]))
+
+(defn- seq-split-enum
+  "seq-split-at for every position i of v."
+  [v i pre x post rel args]
+  (fn [s]
+    (when-let [[f m] (seq-parts s v)]
+      ((or-goals
+        (concat
+         (for [n (range (count f))]
+           (all (== i n) (seq-split-at v n pre x post rel args)))
+         (when m
+           [(seq-split-from v i (count f) pre x post rel args)])))
+       s))))
+
+(defn- seq-splito
+  "A relation where sequence v is pre, then x, then post, where pre has i
+   elements. Enumerates i before an answer is reified if it is still
+   unbound; an i with a finite domain is labeled instead."
+  [v i pre x post rel args]
+  (fn [s]
+    (let [i' (walk s i)]
+      (cond
+        (integer? i') (when-not (neg? i')
+                        ((seq-split-at v i' pre x post rel args) s))
+        (lvar? i') (lmap-pend s rel args #(seq-splito v i pre x post rel args) [v i] true
+                              {:force #(fn [a]
+                                         (if (get-dom-fd a i)
+                                           ((all (force-ans i)
+                                                 (seq-splito v i pre x post rel args))
+                                            a)
+                                           ((seq-split-enum v i pre x post rel args) a)))})
+        :else nil))))
+
+;; -----------------------------------------------------------------------------
+;; Kinds of collections
+
+(defn- index?
+  "True if k is a natural number, i.e. could be an index of a sequence."
+  [k]
+  (and (integer? k) (not (neg? k))))
+
+(defn- coll-kind
+  "Whether x is a map (:map), a sequence (:seq) or something else (:other),
+   or nil if that is not known yet."
+  [s x]
+  (let [x (walk s x)]
+    (cond
+      (lvar? x) (cond
+                  (lmap-lacks-constraint s x) :map
+                  (mid-len-link s x) :seq
+                  :else nil)
+      (or (map? x) (lmap? x)) :map
+      (or (sequential? x) (lcons? x) (lvec? x)) :seq
+      :else :other)))
+
+(defn- conj-kind
+  "Where conj adds to x: at the back of a vector (:vec), the front of a
+   list (:list), into a map (:map), or nil if that is not known yet."
+  [s x]
+  (let [x (walk s x)]
+    (cond
+      (lvar? x) (when (lmap-lacks-constraint s x) :map)
+      (or (vector? x) (lvec? x)) :vec
+      (or (lcons? x) (sequential? x)) :list
+      (or (map? x) (lmap? x)) :map
+      :else :other)))
+
+;; -----------------------------------------------------------------------------
+;; Relations
+
+(defn ntho
+  "A relation where (nth v i) is x, for a sequence v. Enumerates the
+   positions of x in v if i is unbound."
+  [v i x]
+  (fn [s]
+    (let [v' (walk s v)
+          i' (walk s i)]
+      (if (and (vector? v') (index? i'))
+        (when (< i' (count v'))
+          ((== x (nth v' i')) s))
+        (case (coll-kind s v')
+          (:map :other) nil
+          ((seq-splito v i nil x nil `ntho [v i x]) s))))))
+
+(defn- seq-counto [c n]
+  (fn [s]
+    (when-let [[s l] (seq-len s c)]
+      (let [n' (walk s n)]
+        (cond
+          (integer? n') ((len=g l n') s)
+
+          (lvar? n')
+          (if (empty? (lin-terms (lin-walk s l)))
+            ((== n (lin-const (lin-walk s l))) s)
+            (lmap-pend s `counto [c n] #(seq-counto c n) [c n] true
+                       {:force #(fn [a]
+                                  (if (get-dom-fd a n)
+                                    ((all (force-ans n) (seq-counto c n)) a)
+                                    ((all (len-enumg l) (seq-counto c n)) a)))}))
+
+          :else nil)))))
+
+(declare counto)
+
+(defn- map-counto [c n]
+  (fn [s]
+    (when-let [[s g nn tail] (map-parts s c)]
+      (let [k (+ (count g) (count nn))
+            n' (walk s n)]
+        (cond
+          (nil? tail) ((== n k) s)
+          (integer? n') (cond
+                          (< n' k) nil
+                          (clojure.core/== n' k) ((== tail {}) s)
+                          :else ((lmap-suspend `counto [c n] #(counto c n) [c n]) s))
+          :else ((lmap-suspend `counto [c n] #(counto c n) [c n]) s))))))
+
+(defn counto
+  "A relation where (count c) is n, for a map or sequence c. Enumerates the
+   lengths of c if n is unbound and c is a sequence."
+  [c n]
+  (fn [s]
+    (case (coll-kind s c)
+      :seq ((seq-counto c n) s)
+      :map ((map-counto c n) s)
+      :other nil
+      ((lmap-suspend `counto [c n] #(counto c n) [c]) s))))
+
+(defn- seq-conjo
+  "A relation where out is the sequence v with x added at the back."
+  [v x out]
+  (fn [s]
+    (when-let [[f m b] (seq-parts s v)]
+      ((== out (if m (lvec* f m (conj b x)) (conj f x))) s))))
+
+(defn- seq-popo
+  "A relation where sequence v is out with x added at the back."
+  [v out x rel args]
+  (fn [s]
+    (when-let [[f m b] (seq-parts s v)]
+      (cond
+        (seq b) ((all (== x (peek b)) (== out (lvec* f m (pop b)))) s)
+        (nil? m) (when (seq f)
+                   ((all (== x (peek f)) (== out (pop f))) s))
+        :else (lmap-commit
+               s rel args
+               #(or-goals
+                 [(fresh [m']
+                         (== m (lvec* [] m' [x]))
+                         (== out (lvec* f m' [])))
+                  (if (seq f)
+                    (all (== m []) (== x (peek f)) (== out (pop f)))
+                    fail)]))))))
+
+(defn conjo
+  "A relation where out is (conj c x ...): c with each x added at the back
+   of a vector, at the front of a list, or, x being a pair [k v], into a
+   map. The last argument is out."
+  ([c x out]
+   (fn [s]
+     (case (or (conj-kind s c) (conj-kind s out))
+       :vec ((seq-conjo c x out) s)
+       :list ((== out (lcons x c)) s)
+       :map ((fresh [k v] (== x [k v]) (assoco c k v out)) s)
+       :other nil
+       ((lmap-suspend `conjo [c x out] #(conjo c x out) [c out]) s))))
+  ([c x y & more]
+   (fresh [c']
+          (conjo c x c')
+          (apply conjo c' y more))))
+
+(defn peeko
+  "A relation where (peek c) is x: the last element of a vector, or the
+   first of a list."
+  [c x]
+  (fn [s]
+    (case (conj-kind s c)
+      :vec ((fresh [out] (seq-popo c out x `peeko [c x])) s)
+      :list ((fresh [d] (== c (lcons x d))) s)
+      (:map :other) nil
+      ((lmap-suspend `peeko [c x] #(peeko c x) [c]) s))))
+
+(defn popo
+  "A relation where out is (pop c): a vector without its last element, or
+   a list without its first."
+  [c out]
+  (fn [s]
+    (case (or (conj-kind s c) (conj-kind s out))
+      :vec ((fresh [x] (seq-popo c out x `popo [c out])) s)
+      :list ((fresh [x] (== c (lcons x out))) s)
+      (:map :other) nil
+      ((lmap-suspend `popo [c out] #(popo c out) [c out]) s))))
+
+(defn concato
+  "A relation where out is the sequence of the elements of sequence a,
+   then those of sequence b."
+  [a b out]
+  (fn [s]
+    (let [pa (seq-parts s a)
+          pb (seq-parts s b)
+          po (seq-parts s out)]
+      (when (and pa pb po)
+        (let [[fa ma ba] pa
+              [fb mb bb] pb
+              [fo mo] po]
+          (cond
+            (nil? ma) ((== out (lvec* (into fa fb) mb bb)) s)
+            (nil? mb) ((== out (lvec* fa ma (into ba fb))) s)
+
+            ;; out is closed: a ends at one of its positions
+            (nil? mo)
+            (lmap-commit s `concato [a b out]
+                         #(or-goals
+                           (for [p (range (inc (count fo)))]
+                             (all (== a (subvec fo 0 p))
+                                  (== b (subvec fo p))))))
+
+            ;; both a and b are open: out is the front of a, then a middle
+            ;; as long as the rest of both, then the back of b
+            :else
+            ((fresh [mid]
+                    (== out (lvec* fa mid bb))
+                    (fn [s]
+                      (when-let [[s lm] (seq-len s mid)]
+                        (when-let [[s la] (seq-len s ma)]
+                          (when-let [[s lb] (seq-len s mb)]
+                            ((len=g lm (lin-plus (lin-plus la lb)
+                                                 (->lin (+ (count ba) (count fb)))))
+                             s)))))
+                    ;; wake when one of the unknown middles is bound
+                    (lmap-suspend `concato [a b out] #(concato a b out) [ma mb mid]))
+             s)))))))
+
+(defn subveco
+  "A relation where out is (subvec v start end)."
+  [v start end out]
+  (fresh [pre post tail upto]
+         (concato pre tail v)
+         (concato out post tail)
+         (concato pre out upto)
+         (counto pre start)
+         (counto upto end)))
+
+(defn- seq-assoco
+  "assoco on sequences: replaces the element at index i, or adds x at the
+   back if i is the length of m."
+  [m i x out]
+  (conde
+   [(fresh [pre y post]
+           (seq-splito m i pre y post `assoco [m i x out])
+           (concato pre (lcons x post) out))]
+   [(counto m i)
+    (seq-conjo m x out)]))
+
+(extend-protocol IDisunifyTerms
+  LVec
+  (-disunify-terms [u v s cs]
+    ;; keep the whole pair, as for maps: unifying open sequences may
+    ;; introduce fresh vars
+    (when (and (or (sequential? v) (lcons? v) (lvec? v)) (unify s u v))
+      (assoc cs :prefixc (assoc (:prefixc cs) u v)))))
+
+(defn tree-term? [x]
+  (or (coll? x)
+      (instance? ITreeTerm x)))
