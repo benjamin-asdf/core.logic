@@ -78,8 +78,23 @@ lengths can't match fail at once:
 Vectors keep unifying with lists, as they are `=` in Clojure. See
 [the vectors post](docs/blog/04-vectors.md).
 
-**Later:** `get-in`/`assoc-in` over mixed maps and vectors, records as
-data-level types (schema inference run backwards), relational sets, and the
+**Paths (done, JVM).** `get-in` and `assoc-in` through any mix of maps and
+vectors, in every direction:
+
+```clojure
+(run* [p] (get-ino {:a {:b 1} :c [1 {:d 1}]} p 1))
+;;=> ((:a :b) (:c 0) (:c 1 :d))       ;; every path to 1
+
+(run* [m] (assoc-ino m [:a :b] 1 {:a {:b 1}}))
+;;=> (nil {} {:a nil} {:a {}} {:a {:b _0}})   ;; every m assoc-in could start from
+```
+
+| Relation | Means |
+|---|---|
+| `(get-ino m ks v)` | `(get-in m ks)` is `v`, and the path `ks` exists |
+| `(assoc-ino m ks v out)` | `out` is `(assoc-in m ks v)`; missing levels become maps, as in Clojure |
+
+**Later:** records as data-level types (schema inference run backwards), relational sets, and the
 ClojureScript port.
 
 The posts

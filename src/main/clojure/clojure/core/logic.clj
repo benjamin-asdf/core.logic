@@ -3352,6 +3352,7 @@
                             acc))
               (map? t) (reduce implied acc (vals t))
               (coll? t) (reduce implied acc t)
+              (lvec? t) (reduce implied acc (lvec-parts t))
               :else acc))]
     (implied #{} v)))
 
@@ -4649,6 +4650,11 @@
       (cond
         (integer? i') (when-not (neg? i')
                         ((seq-split-at v i' pre x post rel args) s))
+        ;; positions of a closed sequence are enumerated right away, as the
+        ;; entries of a map are
+        (and (lvar? i') (not (get-dom-fd s i)) (nil? (second (seq-parts s v))))
+        ((seq-split-enum v i pre x post rel args) s)
+
         (lvar? i') (lmap-pend s rel args #(seq-splito v i pre x post rel args) [v i] true
                               {:force #(fn [a]
                                          (if (get-dom-fd a i)
@@ -4878,6 +4884,55 @@
            (concato pre (lcons x post) out))]
    [(counto m i)
     (seq-conjo m x out)]))
+
+;; -----------------------------------------------------------------------------
+;; Paths
+
+(defn- missingo
+  "A relation where m, a map or sequence, has no entry at key k: a map
+   lacks k, or k is the length of the sequence, the one index assoc can add."
+  [m k]
+  (fn [s]
+    (let [k' (walk* s k)]
+      (case (or (coll-kind s m) (key-kind k'))
+        :map ((lacks-keyo m k) s)
+        :seq ((counto m k) s)
+        :other nil
+        :either (lmap-pend s `missingo [m k] #(missingo m k) [m k] true
+                           {:force #(conde [(lacks-keyo m k)] [(counto m k)])})
+        ((lmap-suspend `missingo [m k] #(missingo m k) [m k]) s)))))
+
+(defn get-ino
+  "A relation where (get-in m ks) is v and the path ks exists in m, through
+   maps and sequences. Enumerates the paths to v if ks is unbound."
+  [m ks v]
+  (conde
+   [(== ks []) (== m v)]
+   [(fresh [k more x]
+           (conso k more ks)
+           (geto m k x)
+           (get-ino x more v))]))
+
+(defn assoc-ino
+  "A relation where out is (assoc-in m ks v), through maps and sequences.
+   Like assoc-in, missing levels are created as maps, and nil counts as
+   an empty map."
+  [m ks v out]
+  (fresh [k more m']
+         (conso k more ks)
+         (conde
+          [(== m nil) (== m' {})]
+          [(!= m nil) (== m' m)])
+         (conde
+          [(== more []) (assoco m' k v out)]
+          [(fresh [k2 more2 x x']
+                  (conso k2 more2 more)
+                  ;; relating this level first lets a known out bound the descent
+                  (assoco m' k x' out)
+                  (conde
+                   [(geto m' k x)]
+                   [(missingo m' k) (== x nil)])
+                  (assoc-ino x more v x'))])))
 
 (extend-protocol IDisunifyTerms
   LVec

@@ -4472,3 +4472,34 @@
              (counto c 2)
              (== q c)))
          '([_0 :a]))))
+
+;; -----------------------------------------------------------------------------
+;; get-ino and assoc-ino
+
+(deftest test-get-ino
+  (is (= (run* [x] (get-ino {:a {:b [1 2]}} [:a :b 1] x)) '(2)))
+  (is (= (run* [x] (get-ino {:a 1} [] x)) '({:a 1})))
+  (is (= (run* [x] (get-ino {:a 1} [:b] x)) '())))
+
+(deftest test-get-ino-paths
+  (is (= (set (run* [p] (get-ino {:a {:b 1} :c [1 {:d 1}]} p 1)))
+         #{'(:a :b) '(:c 0) '(:c 1 :d)})))
+
+(deftest test-get-ino-backward
+  (is (= (run* [m] (get-ino m [:a 0 :b] 1))
+         [(lm {:a (lm {0 (lm {:b 1} '_0)} '_1)} '_2)
+          (lm {:a (lv [(lm {:b 1} '_0)] '_1 [])} '_2)])))
+
+(deftest test-assoc-ino
+  (is (= (run* [out] (assoc-ino {:a {:b 1}} [:a :c] 2 out)) '({:a {:b 1 :c 2}})))
+  (is (= (run* [out] (assoc-ino {} [:a :b] 1 out)) '({:a {:b 1}})))
+  (is (= (run* [out] (assoc-ino nil [:a] 1 out)) '({:a 1})))
+  (is (= (run* [out] (assoc-ino {:a [1 2]} [:a 1] :x out)) '({:a [1 :x]})))
+  (is (= (run* [out] (assoc-ino {:a [1 2]} [:a 2] :x out)) '({:a [1 2 :x]})))
+  (is (= (run* [out] (assoc-ino {:a [1 2]} [:a 3] :x out)) '())))
+
+(deftest test-assoc-ino-backward
+  (is (= (run* [m] (assoc-ino m [:a :b] 1 {:a {:b 1}}))
+         '(nil {} {:a nil} {:a {}} {:a {:b _0}})))
+  (is (= (run* [ks] (assoc-ino {:a {:b 1}} ks 2 {:a {:b 2}}))
+         '((:a :b)))))
