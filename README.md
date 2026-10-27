@@ -120,7 +120,10 @@ See [the sets post](docs/blog/07-sets.md).
 
 **miniKanren parity.** `defrel`, the type constraints `symbolo`, `numbero` and
 `stringo`, and `absento`, with faster-miniKanren's semantics: conflicting
-types fail while the variable is still unbound.
+types fail while the variable is still unbound. faster-miniKanren's own test
+suite runs as part of `lein test` (`script/fmk_tests.py` regenerates it):
+352 of its 355 tests give the same answers, and the other three are
+explained.
 
 **FD answers without labeling.** Put `(fd/residual)` in a `run` to get the
 domains and FD constraints left on the answer instead of every value. An
@@ -151,6 +154,9 @@ The posts
 6. [Towards relational hyperdimensional computing](docs/blog/06-relational-hdc.md):
    the same data structures, encoded as hypervectors.
 7. [Sets](docs/blog/07-sets.md): maps without values, and what that buys.
+8. [Side by side with miniKanren](docs/blog/08-side-by-side-with-minikanren.md):
+   faster-miniKanren's test suite run on core.logic, the bugs it found, and
+   maps, sets and vectors next to their miniKanren encodings.
 
 Using it
 ----
@@ -183,6 +189,14 @@ Changes from upstream
 - Sets are terms now. Upstream treated a set as an opaque value: logic
   variables inside it were never bound or reified. Now `(== #{x} #{1})` binds
   `x`, and sets with unknown elements unify relationally.
+- Answers leave out `!=`, type and `absento` constraints on variables the
+  answer doesn't show, and disequalities that types, `absento` or other
+  disequalities imply, as faster-miniKanren does. `!=` shows its smallest
+  pairs: `(!= (_0 2))` rather than `(!= ([1 _0] [1 2]))`.
+- `!=` bugs fixed: improper lists threw or lost pairs, a variable paired
+  twice lost a pairing, re-checking treated variables as wildcards, and
+  nested improper lists went unwatched. See
+  [post 8](docs/blog/08-side-by-side-with-minikanren.md).
 
 ----
 

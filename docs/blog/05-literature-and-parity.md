@@ -141,6 +141,10 @@ all but the third:
 
 What remains is ClojureScript, written up in [future work](../future-work.md).
 
+Since then, faster-miniKanren's own test suite runs on core.logic: 352 of
+355 tests agree, after fixing seven `!=` and `absento` bugs it found. See
+[part 8](08-side-by-side-with-minikanren.md).
+
 ## References
 
 Checked for title, authors, venue and year unless marked *(unchecked)*.
