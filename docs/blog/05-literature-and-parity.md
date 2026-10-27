@@ -8,6 +8,14 @@ unknown pieces all have decades of theory behind them. This post checks the
 fork against that theory, and then checks core.logic itself against
 miniKanren.
 
+The nearest prior work is core.logic's own roadmap. In 2013 David Nolen's wiki
+pages [Constraints & modes](https://github.com/clojure/core.logic/wiki/Constraints-&-modes)
+and [CLP(Set)](https://github.com/clojure/core.logic/wiki/CLP(Set)) asked for
+relational versions of Clojure's map and set functions, worked through `conjo`
+and `unionc` on partly known data, and left them as future work. The
+[series index](README.md#why-this-is-the-corelogic-thing) compares their
+predictions with what the fork answers.
+
 ## Maps are feature logic
 
 Smolka and Treinen's **CFT** ("Records for Logic Programming", *JLP* 1994)
@@ -197,4 +205,6 @@ Checked for title, authors, venue and year unless marked *(unchecked)*.
   Structures", miniKanren Workshop 2025.
 - A. Sanna, W. E. Byrd, N. Amin, "chrKanren: Constraint Handling Rules in a
   Relational Language", ICLP 2026.
+- D. Nolen, "Constraints & modes" and "CLP(Set)", core.logic wiki, 2013,
+  https://github.com/clojure/core.logic/wiki.
 - Difference lists: L. Sterling, E. Shapiro, *The Art of Prolog* *(unchecked)*.

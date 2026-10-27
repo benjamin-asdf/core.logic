@@ -3,8 +3,10 @@ core.logic — relational data fork
 
 This is my fork of [clojure/core.logic](https://github.com/clojure/core.logic).
 It is about one thing: **making Clojure's own data relational**. miniKanren is at
-its best on lists and trees; idiomatic Clojure lives in maps and vectors. This
-fork makes maps and vectors first-class relational terms, and keeps a strict
+its best on lists and trees, because the pair is Scheme's data; Clojure's data
+is maps, vectors and sets, so a relational Clojure should be relational over
+those ([why](docs/blog/README.md#why-this-is-the-corelogic-thing)). This
+fork makes maps, vectors and sets first-class relational terms, and keeps a strict
 rule: no operation may silently give up. Everything either answers correctly in
 every mode, or waits until it can.
 

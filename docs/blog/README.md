@@ -5,6 +5,58 @@ every relation runs in every direction, and anything it can't decide yet, it
 waits on visibly instead of guessing. The code and an overview are in the
 [repository README](../../README.md).
 
+## Why this is the core.logic thing
+
+A logic language takes its terms from its host. miniKanren's term is the
+Scheme pair, because Scheme's data is the pair: `appendo` and `membero` work
+so well because a partly known list has a natural shape, a known front and an
+unbound tail. core.logic brought miniKanren to Clojure, and the pair came
+along. Clojure's own data came in second class: two maps unified only if they
+had exactly the same keys, and nothing could take a map apart or build one.
+
+But the data is what Clojure is. Literal, immutable maps, vectors and sets,
+used for everything: "just use maps", data over functions over macros, a
+program is a pipeline of `get`, `assoc`, `merge`, `conj` and `union`. Clojure
+programmers don't encode a record as an association list or a set as a list
+with no duplicates; they write `{:name "ada"}` and `#{1 2}`.
+
+So a relational Clojure should be relational over *that*. This series makes
+it so: `get`, `assoc`, `merge`, `nth`, `concat`, `union` and friends, each as
+a relation that runs backwards. A query can ask which map an `assoc` came
+from, which key path leads to a value, or which two sets have this union, on
+the same data the rest of the program uses. That's the part of core.logic only
+Clojure can have, and what miniKanren-on-lists can only encode.
+
+This isn't a new wish. In 2013 David Nolen put it on core.logic's own
+roadmap. The wiki page
+[Constraints & modes](https://github.com/clojure/core.logic/wiki/Constraints-&-modes)
+opens: "core.logic unfortunately to this day continues to emphasize operating
+on sequence-like data structures due to its Prolog & Scheme roots", and asks
+for "constraint versions of Clojure functions". It sketches an `assocc`, finds
+that running it backwards branches, and settles on `conjo` as the test case:
+
+```clojure
+(run* [q]
+  (fresh [v o]
+    (== o {:foo 1})
+    (conjo q [:foo v] o)))
+```
+
+"So we should see the following results: `({} {:foo _0})`." That is exactly
+what the fork answers. The companion page
+[CLP(Set)](https://github.com/clojure/core.logic/wiki/CLP(Set)) asks for sets
+with unknown elements, `(unionc #{:cat x y} #{:dog :bird z} o)`, and notes
+that such a union branches over which elements pair up. The fork runs that one
+too: with `o` = `#{:cat :dog :bird}`, `x` and `y` are `:dog` and `:bird` in
+either order and `z` is `:cat`. (Writing this found a bug: the fork used to
+let `x` be `:cat` too. Fixed.) Both pages list the work as future work; this
+series is that work.
+
+It also sets the bar. A relation that only works in some directions is a
+function with extra steps, so the series holds every relation to one rule: it
+answers correctly in every mode, or waits until it can
+([part 2](02-no-unsupported-behaviour.md)).
+
 1. [Relational maps](01-relational-maps.md): a tour of the API.
 2. [No unsupported behaviour](02-no-unsupported-behaviour.md): why the design
    had to be redone, and how unknown keys, lazy checks and suspended goals fit
