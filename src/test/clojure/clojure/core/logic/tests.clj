@@ -4450,7 +4450,7 @@
              (!= v [1 2])
              (counto v 2)
              (== q v)))
-         '(([1 _0] :- (!= ([1 _0] [1 2]))))))
+         '(([1 _0] :- (!= (_0 2))))))
   (is (= (run* [q]
            (fresh [v]
              (ntho v 0 1)
@@ -4756,3 +4756,55 @@
          `((~'_0 :- (fd/in ~'_0 (fd/interval 0 2))) 7)))
   ;; labeling stays the default
   (is (= (run* [q] (fd/in q (fd/interval 1 3))) '(1 2 3))))
+
+;; -----------------------------------------------------------------------------
+;; Disequality fixes found by running faster-miniKanren's tests
+
+(deftest test-disequality-lcons
+  ;; used to throw: seq on an LCons
+  (is (= (run* [q] (fresh [w x y z] (!= (lcons w x) (lcons y z)) (== q 1)))
+         '(1)))
+  ;; used to say "always different": x may be (2)
+  (is (= (run* [x] (!= (lcons 1 x) [1 2]))
+         '((_0 :- (!= (_0 (2)))))))
+  (is (= (run* [x] (!= (lcons 1 x) [1 2]) (== x [2])) '())))
+
+(deftest test-disequality-lcons-equality
+  ;; LCons = takes vars as wildcards, so this used to fail
+  (is (= (map pr-str (run* [q] (fresh [a b] (!= q (lcons a b)) (== q (lcons 3 4)))))
+         ["(3 . 4)"])))
+
+(deftest test-disequality-shared-var
+  ;; the second pairing of q used to overwrite the first: q != r only
+  (is (= (run* [q p r] (!= [q q] [p r]) (== q 1) (== p 2) (== r 1))
+         '([1 2 1])))
+  (is (= (run* [q p r] (!= [q q] [p r]) (== q 1) (== p 1) (== r 1))
+         '())))
+
+(deftest test-disequality-wakes-on-nested-lcons
+  ;; the vars of ((3 . e) f . 4) used to go unwatched
+  (is (= (run* [q] (fresh [e f]
+                     (!= q (lcons (lcons 3 e) (lcons f 4)))
+                     (== e 1) (== f 2)
+                     (== q (lcons (lcons 3 1) (lcons 2 4)))))
+         '())))
+
+(deftest test-absento-non-ground
+  (is (= (run* [q] (absento q q)) '()))
+  (is (= (run* [q] (fresh [a]
+                     (== (lcons a 3) q)
+                     (absento q (lcons a (lcons 4 (lcons a 3))))))
+         '()))
+  (is (= (map pr-str (run* [q] (fresh [a b]
+                                 (absento (lcons a b) q)
+                                 (== q (lcons 3 (lcons b b))))))
+         ["(3 _0 . _0)"])))
+
+(deftest test-residual-simplification
+  ;; implied by the type
+  (is (= (run* [q] (symbolo q) (!= q 5)) '((_0 :- (clojure.core.logic/symbolo _0)))))
+  ;; on a var the answer doesn't show
+  (is (= (run* [q] (fresh [x] (symbolo x) (!= x q))) '(_0)))
+  ;; subsumed
+  (is (= (run* [q] (fresh [x y] (== q [x y]) (!= x 5) (!= [x y] [5 6])))
+         '(([_0 _1] :- (!= (_0 5)))))))

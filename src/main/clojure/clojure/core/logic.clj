@@ -2274,18 +2274,119 @@
        (verify-all-bound a constrained)
        ((onceo (force-ans constrained)) a)))))
 
+(declare recover-vars-from-term simplify-residuals term-children)
+
+;; Constraints that hold for some value of any var they mention, whatever
+;; the other vars are: one mentioning a var the answer doesn't show is
+;; satisfied by choosing that var, and is left out.
+(def ^:private purgeable-rators
+  #{`!= `absento `symbolo `numbero `stringo})
+
+(defn- purgeable? [c]
+  (and (instance? clojure.core.logic.protocols.IConstraintOp c)
+       (contains? purgeable-rators (-rator c))))
+
+(defn- constraint-vars [a c]
+  (if-let [args (:args (::lmap-rel (meta c)))]
+    (recover-vars-from-term (walk* a (vec args)))
+    (if (instance? clojure.core.logic.protocols.IConstraintOp c)
+      (recover-vars-from-term (walk* a (vec (-rands c))))
+      #{})))
+
 (defn reify-constraints
   ([v r a] (reify-constraints v r a nil))
   ([v r a extra]
-   (let [cs  (:cs  a)
-         rcs (->> (vals (:cm cs))
-                  (filter reifiable?)
-                  (map #(-reifyc % v r a))
-                  (filter #(not (nil? %)))
-                  (into (set extra)))]
+   (let [cs    (->> (:cm (:cs a)) (sort-by key) vals (filter reifiable?))
+         shown (into #{} (mapcat #(constraint-vars a %)) (remove purgeable? cs))
+         shown? #(or (contains? shown %) (not (lvar? (walk r %))))
+         cs    (filter #(or (not (purgeable? %))
+                            (every? shown? (constraint-vars a %)))
+                       cs)
+         ;; name the vars only constraints show, the same in each
+         r     (-reify* (vary-meta r assoc ::answer-names (set (vals (:s r))))
+                        (vec (mapcat #(sort-by str (constraint-vars a %)) cs)))
+         rcs   (->> cs
+                    (map #(-reifyc % v r a))
+                    (filter #(not (nil? %)))
+                    (into (set extra))
+                    (simplify-residuals (set (vals (:s r)))))]
      (if (empty? rcs)
        (choice v empty-f)
        (choice `(~v :- ~@rcs) empty-f)))))
+
+(defn- value-type [names x]
+  (cond
+    (contains? names x) nil
+    (symbol? x) `symbolo
+    (number? x) `numbero
+    (string? x) `stringo
+    :else ::other))
+
+(defn- simplify-residuals
+  "Simplifies reified residual constraints as faster-miniKanren does: drops
+   disequalities implied by types or by other disequalities, and absento on
+   a typed var. names are the reified vars."
+  [names rcs]
+  (let [types (into {} (keep (fn [f]
+                               (when (and (seq? f) (= 2 (count f))
+                                          (#{`symbolo `numbero `stringo} (first f)))
+                                 [(second f) (first f)])))
+                    rcs)
+        ;; u and v can never be equal because of their types
+        apart? (fn [u v]
+                 (let [tu (or (types u) (value-type names u))
+                       tv (or (types v) (value-type names v))]
+                   (and tu tv (not= tu tv))))
+        pairs (fn [f] (set (map (fn [[u v]] #{u v}) (rest f))))
+        neq? #(and (seq? %) (= '!= (first %)) (every? sequential? (rest %)))
+        rcs (keep (fn [f]
+                    (cond
+                      (and (neq? f) (some (fn [[u v]] (apart? u v)) (rest f)))
+                      nil
+
+                      (and (seq? f) (= `absento (first f)) (types (nth f 2)))
+                      (let [[_ t x] f]
+                        (cond
+                          (apart? t x) nil
+                          (and (contains? names t) (not (types t))) f
+                          :else `(~'!= (~x ~t))))
+
+                      :else f))
+                  rcs)
+        absento? #(and (seq? %) (= `absento (first %)))
+        ;; for each x, the terms absent from it
+        absents (reduce (fn [m [_ t x]] (update-in m [x] (fnil conj #{}) t))
+                        {} (filter absento? rcs))
+        absent? (fn [t x] (contains? (get absents x) t))
+        strictly-in? (fn in? [x t]
+                       (some #(or (= x %) (in? x %)) (term-children t)))
+        rcs (keep (fn [f]
+                    (if (and (seq? f) (= `absento (first f)))
+                      (let [[_ t x] f]
+                        (when-not (or
+                                   ;; x can't hold a term containing x
+                                   (and (contains? names x) (strictly-in? x t))
+                                   ;; a part of t is absent already
+                                   (some #(strictly-in? % t) (get absents x)))
+                          f))
+                      ;; absento t x implies x != t, so a disequality
+                      ;; holds when one of its pairs can't
+                      (when-not (and (neq? f)
+                                     (some (fn [[u v]] (or (absent? v u) (absent? u v)))
+                                           (rest f)))
+                        f)))
+                  rcs)
+        neqs (filter neq? rcs)]
+    (set (remove (fn [f]
+                   (and (neq? f)
+                        (some #(and (not (identical? % f))
+                                    (let [p (pairs %) q (pairs f)]
+                                      (and (every? q p)
+                                           (or (< (count p) (count q))
+                                               ;; of two equal ones keep one
+                                               (pos? (compare (pr-str f) (pr-str %)))))))
+                              neqs)))
+                 rcs))))
 
 (declare lmap-force recover-vars-from-term)
 
@@ -2444,7 +2545,8 @@
      cs
      (let [u (walk s u)
            v (walk s v)]
-       (if (identical? u v)
+       ;; a walked var may be a copy of the var: compare vars by =
+       (if (or (identical? u v) (and (lvar? u) (lvar? v) (= u v)))
          cs
          (if (and (not (lvar? u)) (lvar? v))
            (-disunify-terms v u s cs)
@@ -2461,38 +2563,27 @@
 
   LVar
   (-disunify-terms [u v s {pc :prefixc :as cs}]
-    (assoc cs :prefixc (assoc pc u v)))
+    ;; the prefix is a substitution too: a var paired already is replaced
+    ;; by its partner, so that no pairing is lost
+    (cond
+      (contains? pc u) (disunify s (pc u) v cs)
+      (and (lvar? v) (contains? pc v)) (disunify s u (pc v) cs)
+      :else (assoc cs :prefixc (assoc pc u v))))
 
   LCons
   (-disunify-terms [u v s cs]
     (cond
       (lvec? v) (-disunify-terms v u s cs)
 
+      ;; pair up the heads, then disunify the tails, which may be vars
       (sequential? v)
-      (loop [u u v (seq v) cs cs]
-        (if-not (nil? v)
-          (if (lcons? u)
-            (if-let [cs (disunify s (lfirst u) (first v) cs)]
-              (recur (lnext u) (next v) cs)
-              nil)
-            nil)
-          (if (lvar? u)
-            (disunify s u () cs)
-            nil)))
+      (when-let [v (seq v)]
+        (when-let [cs (disunify s (lfirst u) (first v) cs)]
+          (disunify s (lnext u) (rest v) cs)))
 
       (lcons? v)
-      (loop [u u v (seq v) cs cs]
-        (if (lvar? u)
-          (if (lvar? v)
-            (disunify s u v cs)
-            nil)
-          (cond
-            (lvar? v) nil
-            (and (lcons? u) (lcons? v))
-            (if-let [cs (disunify s (lfirst u) (lfirst v) cs)]
-              (recur (lnext u) (lnext v) cs)
-              nil)
-            :else nil)))
+      (when-let [cs (disunify s (lfirst u) (lfirst v) cs)]
+        (disunify s (lnext u) (lnext v) cs))
 
       :else nil))
 
@@ -2551,14 +2642,24 @@
       (when sp
         (identical? s sp))))
 
-(defn recover-vars-from-term [x]
-  (let [r (atom #{})]
-    (walk-term x
-               (fn [x]
-                 (if (lvar? x)
-                   (do (swap! r conj x) x)
-                   x)))
-    @r))
+(defn recover-vars-from-term
+  "The vars in the term x. Traverses x directly: the walk-term of LCons
+   doesn't descend into its parts."
+  [x]
+  (loop [todo (list x) r (transient #{})]
+    (if-let [[x & todo] (seq todo)]
+      (cond
+        (lvar? x) (recur todo (conj! r x))
+        (lcons? x) (recur (list* (lfirst x) (lnext x) todo) r)
+        (map? x) (recur (concat (keys x) (vals x) todo) r)
+        (coll? x) (recur (concat x todo) r)
+        (tree-term? x) (if-let [cs (term-children x)]
+                         (recur (concat cs todo) r)
+                         (let [r* (atom r)]
+                           (walk-term x (fn [y] (when (lvar? y) (swap! r* conj! y)) y))
+                           (recur todo @r*)))
+        :else (recur todo r))
+      (persistent! r))))
 
 (defn recover-vars [p]
   (loop [p (seq p) r #{}]
@@ -2586,10 +2687,12 @@
                              ;; and run an equality test there must be a better
                              ;; way - David
                             xv (walk* s x)
-                            vv (walk* s v)]
+                            vv (walk* s v)
+                            ;; not =: LCons equality takes vars as wildcards
+                            s' (unify s xv vv)]
                         (cond
-                          (= xv vv) (recur (next sp) (dissoc p x))
-                          (nil? (unify s xv vv)) nil
+                          (nil? s') nil
+                          (identical? s' s) (recur (next sp) (dissoc p x))
                           :else (recur (next sp) (assoc (dissoc p x) xv vv))))
                       p))]
             (if p
@@ -2610,10 +2713,14 @@
     (-with-prefix [_ p] (!=c p))
     IReifiableConstraint
     (-reifyc [this v r a]
-      (let [p* (-reify a (map (fn [[lhs rhs]] `(~lhs ~rhs)) p) r)]
-        (if (empty? p*)
-          '()
-          `(~'!= ~@p*))))
+      ;; disunify again, to show the pairs of vars and atoms left; when a
+      ;; pair can't hold any more, the constraint holds
+      (when-let [cs (reduce (fn [cs [u v]] (or (disunify a u v cs) (reduced nil)))
+                            {:prefixc {}} p)]
+        (let [p* (-reify a (map (fn [[lhs rhs]] `(~lhs ~rhs)) (:prefixc cs)) r)]
+          (if (empty? p*)
+            '()
+            `(~'!= ~@p*)))))
     IConstraintOp
     (-rator [_] `!=)
     (-rands [_] (seq (recover-vars p)))
@@ -3417,8 +3524,9 @@
       (-reifyc [_ v r a]
         ;; hide what the answer already shows, e.g. the rest of (lmap {:a 1} | _0)
         ;; lacks :a, and constraints on vars that are not part of the answer
-        (let [sym (walk* r (walk* a x))]
-          (when-not (lvar? sym)
+        (let [sym (walk* r (walk* a x))
+              names (::answer-names (meta r))]
+          (when (if names (contains? names sym) (not (lvar? sym)))
             (when-let [shown (seq (remove (lmap-implied-keys v sym) ks))]
               (if (= kind :set)
                 `(lackso ~sym ~@shown)
@@ -3580,7 +3688,7 @@
           (cons rel (-reify a args r))))
       IConstraintWatchedStores
       (-watched-stores [_] #{::subst}))
-    {::lmap-rel (merge {:ambiguous ambiguous? :retry retry} info)}))
+    {::lmap-rel (merge {:ambiguous ambiguous? :retry retry :args args} info)}))
 
 (defn- lmap-suspend
   "A goal suspending the relation rel on args until a var in watch-terms is
@@ -5545,6 +5653,7 @@
     (lcons? x) [(lfirst x) (lnext x)]
     (lmap? x) (concat (keys (lmap-entries x)) (vals (lmap-entries x)) [(lmap-rest x)])
     (lvec? x) (let [[f m b] (lvec-parts x)] (concat f [m] b))
+    (lset? x) (concat (lset-elems x) [(lset-rest x)])
     (map? x) (concat (keys x) (vals x))
     (coll? x) (seq x)
     :else nil))
@@ -5556,17 +5665,19 @@
     (let [t' (walk* s t)
           x' (walk s x)]
       (cond
-        (not (ground-term? t' s))
-        ((lmap-suspend `absento [t x] #(absento t x) [t]) s)
-
         (lvar? x')
-        ((lmap-suspend `absento [t x] #(absento t x) [x]) s)
+        (if (identical? x' t')
+          nil
+          ((all
+            ;; x is a subterm of itself, and a var t may become x
+            (if (ground-term? t' s) succeed (!= x' t'))
+            (lmap-suspend `absento [t x] #(absento t x) [x])) s))
 
         :else
         ((all
-          (if (or (coll? t') (tree-term? t'))
-            (!= x' t')
-            (if (= x' t') fail succeed))
+          (if (and (ground-term? t' s) (not (coll? t')) (not (tree-term? t')))
+            (if (= x' t') fail succeed)
+            (!= x' t'))
           (everyg #(absento t' %) (term-children x')))
          s)))))
 
