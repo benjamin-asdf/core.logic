@@ -1000,7 +1000,8 @@
    is in n* or the new singletons we have failed. If not we simply remove 
    the value of x from the remaining non-singleton domains bound to vars."
   [x y* n*]
-  (reify
+  (with-meta
+   (reify
     IEnforceableConstraint
     IConstraintStep
     (-step [this s]
@@ -1031,7 +1032,8 @@
     (-rator [_] `-distinct)
     (-rands [_] [x])
     IConstraintWatchedStores
-    (-watched-stores [this] #{::l/subst})))
+    (-watched-stores [this] #{::l/subst}))
+   {::distinct (cons x (concat y* n*))}))
 
 (defn -distinct [x y* n*]
   (cgoal (-distinctc x y* n*)))
@@ -1164,3 +1166,83 @@
 (defmacro eq [& forms]
   `(all
     ~@(map eq-form forms)))
+
+;; -----------------------------------------------------------------------------
+;; Residual answers
+
+(defn- dom-form [d]
+  (cond
+    (integer? d) d
+    (interval? d) `(interval ~(-lb d) ~(-ub d))
+    (finite-domain? d) `(domain ~@(:s d))
+    :else `(multi-interval ~@(map dom-form (-intervals d)))))
+
+(def ^:private residual-rators
+  #{`== `!= `<= `+ `* `distinct `-distinct})
+
+(defn- residual-terms
+  "The terms an FD constraint relates, or nil for other constraints."
+  [c]
+  (when (residual-rators (-rator c))
+    (if-let [d (::distinct (meta c))]
+      [d]
+      (vec (-rands c)))))
+
+(defn- term-vars [a t]
+  (recover-vars-from-term (walk* a t)))
+
+(defn- constraint-form [rator terms]
+  (condp core/= rator
+    `-distinct `(distinct ~(sort-by str (first terms)))
+    `distinct (let [t (first terms)]
+                `(distinct ~(if (sequential? t) (sort-by str t) t)))
+    (cons rator terms)))
+
+(defn- residual-forms
+  "Reifies the domains and FD constraints connected to the answer's vars xs
+   through shared vars. Names the vars the answer doesn't show with r."
+  [xs r a]
+  (let [cs (->> (:cm (:cs a))
+                (sort-by key)
+                (keep (fn [[_ c]]
+                        (when-let [ts (residual-terms c)]
+                          [(-rator c) ts (term-vars a ts)]))))
+        ;; the constraints reachable from xs, and their vars
+        [vs cs] (loop [vs (set xs) done [] todo cs]
+                  (let [{reach true more false}
+                        (group-by #(boolean (some vs (nth % 2))) todo)]
+                    (if (seq reach)
+                      (recur (into vs (mapcat #(nth % 2) reach))
+                             (into done reach) more)
+                      [vs done])))
+        r (-reify* r (vec (concat xs (mapcat #(nth % 2) cs))))
+        doms (for [x (sort-by #(str (walk r %)) vs)
+                   :let [d (l/get-dom a x ::l/fd)]
+                   :when d]
+               `(in ~(walk r x) ~(dom-form d)))
+        forms (set (for [[rator ts] cs]
+                     (constraint-form rator (-reify a ts r))))
+        ;; u < v is posted as u <= v and u != v
+        lt (set (for [f forms
+                      :when (core/= (first f) `<=)
+                      :when (or (forms (list `!= (nth f 1) (nth f 2)))
+                                (forms (list `!= (nth f 2) (nth f 1))))]
+                  f))
+        forms (concat
+               (for [f forms
+                     :when (not (lt f))
+                     :when (not (and (core/= (first f) `!=)
+                                     (some (fn [[_ u v]]
+                                             (core/= #{u v} (set (rest f))))
+                                           lt)))]
+                 f)
+               (for [[_ u v] lt] `(< ~u ~v)))]
+    [r (concat doms forms)]))
+
+(defn residual
+  "A goal making answers keep their FD vars unlabeled: an answer shows the
+   domains and FD constraints left on its vars instead of each value. An
+   answer is only given if labeling would find at least one solution."
+  []
+  (fn [a]
+    (vary-meta a assoc ::l/residual residual-forms)))

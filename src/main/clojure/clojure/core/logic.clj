@@ -2274,35 +2274,65 @@
        (verify-all-bound a constrained)
        ((onceo (force-ans constrained)) a)))))
 
-(defn reify-constraints [v r a]
-  (let [cs  (:cs  a)
-        rcs (->> (vals (:cm cs))
-                 (filter reifiable?)
-                 (map #(-reifyc % v r a))
-                 (filter #(not (nil? %)))
-                 (into #{}))]
-    (if (empty? rcs)
-      (choice v empty-f)
-      (choice `(~v :- ~@rcs) empty-f))))
+(defn reify-constraints
+  ([v r a] (reify-constraints v r a nil))
+  ([v r a extra]
+   (let [cs  (:cs  a)
+         rcs (->> (vals (:cm cs))
+                  (filter reifiable?)
+                  (map #(-reifyc % v r a))
+                  (filter #(not (nil? %)))
+                  (into (set extra)))]
+     (if (empty? rcs)
+       (choice v empty-f)
+       (choice `(~v :- ~@rcs) empty-f)))))
 
-(declare lmap-force)
+(declare lmap-force recover-vars-from-term)
+
+(defn- some-answer?
+  "Whether the stream has at least one answer. Searches depth first."
+  [st]
+  (loop [st st]
+    (cond
+      (nil? st) false
+      (instance? clojure.lang.Fn st) (recur (st))
+      :else true)))
+
+(defn- reify-answer
+  "A goal giving the reified answer x. residual, when given, is a fn of the
+   answer's vars, the reifier r and the substitution a returning the reifier
+   extended by the vars it names, and further residual forms."
+  [x residual]
+  (fn [a]
+    (let [n (.get map-key-collision-count)
+          v (walk* a x)]
+      ;; two keys of a map in the answer became equal: it denotes no map
+      (when-not (map-keys-collided-since? n)
+        (let [r (-reify* (with-meta empty-s (meta a)) v)
+              [r extra] (if residual
+                          (residual (recover-vars-from-term v) r a)
+                          [r nil])]
+          (if (and (zero? (count r)) (empty? extra))
+            (choice v empty-f)
+            (reify-constraints (walk* r v) r a extra)))))))
 
 (defn reifyg [x]
-  (all
-   lmap-force
-   (enforce-constraints x)
-   ;; labeling may have woken relations that are ambiguous again
-   lmap-force
-   (fn [a]
-     (let [n (.get map-key-collision-count)
-           v (walk* a x)]
-       ;; two keys of a map in the answer became equal: it denotes no map
-       (when-not (map-keys-collided-since? n)
-         (let [r (-reify* (with-meta empty-s (meta a)) v)]
-           (if (zero? (count r))
-             (choice v empty-f)
-             (let [v (walk* r v)]
-               (reify-constraints v r a)))))))))
+  (fn [a]
+    (if-let [residual (::residual (meta a))]
+      ;; leave constrained vars unlabeled, but only answer if labeling them
+      ;; would find a solution
+      ((all
+        lmap-force
+        (fn [a]
+          (when (some-answer? ((all (enforce-constraints x) lmap-force) a))
+            a))
+        (reify-answer x residual)) a)
+      ((all
+        lmap-force
+        (enforce-constraints x)
+        ;; labeling may have woken relations that are ambiguous again
+        lmap-force
+        (reify-answer x nil)) a))))
 
 (defn cgoal [c]
   (reify

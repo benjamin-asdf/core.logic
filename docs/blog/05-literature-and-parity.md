@@ -115,7 +115,7 @@ core.logic is **ahead** on tabling, nominal logic (αKanren), CLP(FD) and the
 fact database. It **matches** on `==`, `fresh`, `conde` interleaving,
 `conda`/`condu`, `project`, pattern matching, disequality and the default
 occurs check. It was **behind** on these, most important first. The fork has closed
-the first, second, fourth and fifth:
+all but the third:
 
 1. ~~`symbolo`, `numbero`, `stringo` are not real type constraints.~~ They
    are now. A constrained variable carries its type, so `(symbolo x)` with
@@ -131,13 +131,15 @@ the first, second, fourth and fifth:
    The simple relational interpreter now runs as a test. It finds the classic
    quine `((lambda (x) (list x (list 'quote x))) '(lambda (x) (list x (list 'quote x))))`
    in about 30 ms and a twine in about 0.2 s on the JVM.
-6. **FD domains aren't reified**: answers don't show the domains their
-   variables are still constrained to.
+6. ~~FD domains aren't reified.~~ With `(fd/residual)` in a `run`, answers
+   keep their FD variables unlabeled and show the domains and FD constraints
+   left on them, like Prolog's CLP(FD). An answer is only given if labeling
+   would find a solution, since narrowing domains alone can't tell.
 7. ~~`!=` on maps with unknown keys~~ works, and is now tested. Its leftover
    constraint keeps the two maps as one pair, `(!= ({_0 1} {:a 1}))`, in the
    same `(!= (lhs rhs))` form core.logic uses for every disequality.
 
-What remains is ClojureScript and reifying FD domains.
+What remains is ClojureScript, written up in [future work](../future-work.md).
 
 ## References
 

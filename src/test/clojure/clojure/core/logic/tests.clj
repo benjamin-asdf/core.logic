@@ -4700,3 +4700,59 @@
 (deftest test-set-not-a-map
   (is (= (run* [q] (fresh [s] (containso s 1) (== s {1 1}) (== q 1))) '()))
   (is (= (run* [q] (fresh [s] (geto s 1 1) (== s #{1}) (== q 1))) '())))
+
+;; -----------------------------------------------------------------------------
+;; FD residual answers
+
+(defn residual-set [answer]
+  [(first answer) (set (drop 2 answer))])
+
+(deftest test-fd-residual-domain
+  (is (= (run* [q] (fd/residual) (fd/in q (fd/interval 1 3)))
+         `((~'_0 :- (fd/in ~'_0 (fd/interval 1 3))))))
+  (is (= (run* [q] (fd/residual)
+           (fresh [x] (fd/in x (fd/interval 1 1000000)) (== q [x])))
+         `(([~'_0] :- (fd/in ~'_0 (fd/interval 1 1000000))))))
+  (is (= (run* [q] (fd/residual) (fd/in q (fd/domain 1 5 9)))
+         `((~'_0 :- (fd/in ~'_0 (fd/domain 1 5 9)))))))
+
+(deftest test-fd-residual-constraints
+  ;; fd/< narrows only once a side is known, so the domains stay 1..3
+  (is (= (map residual-set
+              (run* [x y] (fd/residual) (fd/in x y (fd/interval 1 3)) (fd/< x y)))
+         `[[[~'_0 ~'_1] #{(fd/< ~'_0 ~'_1)
+                          (fd/in ~'_0 (fd/interval 1 3))
+                          (fd/in ~'_1 (fd/interval 1 3))}]]))
+  (is (= (map residual-set
+              (run* [x y] (fd/residual) (fd/in x y (fd/interval 1 3)) (fd/<= x y)
+                (fd/!= y 3)))
+         `[[[~'_0 ~'_1] #{(fd/<= ~'_0 ~'_1)
+                          (fd/in ~'_0 (fd/interval 1 2))
+                          (fd/in ~'_1 (fd/interval 1 2))}]]))
+  ;; y isn't in the answer, but x depends on it
+  (is (= (map residual-set
+              (run* [x] (fd/residual)
+                (fresh [y] (fd/in x y (fd/interval 0 9)) (fd/+ x y 10))))
+         `[[~'_0 #{(fd/+ ~'_0 ~'_1 10)
+                   (fd/in ~'_0 (fd/interval 1 9))
+                   (fd/in ~'_1 (fd/interval 1 9))}]]))
+  ;; z is unrelated to the answer
+  (is (= (run* [x] (fd/residual)
+           (fresh [z] (fd/in x (fd/interval 1 2)) (fd/in z (fd/interval 1 9))))
+         `((~'_0 :- (fd/in ~'_0 (fd/interval 1 2)))))))
+
+(deftest test-fd-residual-needs-solution
+  ;; every domain stays {1 2}, but three distinct values don't fit
+  (is (= (run* [x] (fd/residual)
+           (fresh [y z] (fd/in x y z (fd/domain 1 2)) (fd/distinct [x y z])))
+         '()))
+  (is (= (count (run* [x] (fd/residual)
+                  (fresh [y z] (fd/in x y z (fd/domain 1 2 3)) (fd/distinct [x y z]))))
+         1)))
+
+(deftest test-fd-residual-ground
+  (is (= (run* [x] (fd/residual) (fd/in x (fd/interval 0 10))
+           (conde [(fd/< x 3)] [(== x 7)]))
+         `((~'_0 :- (fd/in ~'_0 (fd/interval 0 2))) 7)))
+  ;; labeling stays the default
+  (is (= (run* [q] (fd/in q (fd/interval 1 3))) '(1 2 3))))

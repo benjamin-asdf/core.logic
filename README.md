@@ -122,6 +122,16 @@ See [the sets post](docs/blog/07-sets.md).
 `stringo`, and `absento`, with faster-miniKanren's semantics: conflicting
 types fail while the variable is still unbound.
 
+**FD answers without labeling.** Put `(fd/residual)` in a `run` to get the
+domains and FD constraints left on the answer instead of every value. An
+answer is only given if a solution exists. Labeling stays the default.
+
+```clojure
+(run* [x] (fd/residual) (fresh [y] (fd/in x y (fd/interval 0 9)) (fd/+ x y 10)))
+;;=> ((_0 :- (fd/+ _0 _1 10) (fd/in _0 (fd/interval 1 9)) (fd/in _1 (fd/interval 1 9))))
+;;   (printed with fully qualified names)
+```
+
 **Later:** records as data-level types (schema inference run backwards), and
 the ClojureScript port. See [future work](docs/future-work.md).
 
