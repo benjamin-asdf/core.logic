@@ -123,7 +123,7 @@ See [the sets post](docs/blog/07-sets.md).
 types fail while the variable is still unbound.
 
 **Later:** records as data-level types (schema inference run backwards), and
-the ClojureScript port.
+the ClojureScript port. See [future work](docs/future-work.md).
 
 The posts
 ----
