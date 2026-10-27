@@ -4631,3 +4631,72 @@
     (is (not= p q))
     (is (= (run* [v] (evalo p v)) (list q)))
     (is (= (run* [v] (evalo q v)) (list p)))))
+
+;; =============================================================================
+;; LSet - relational sets
+
+(defn- ls
+  "An LSet as it appears in a reified answer."
+  [elems rest]
+  (clojure.core.logic.LSet. elems rest -1))
+
+(deftest test-containso
+  (is (= (set (run* [x] (containso #{1 2 3} x))) #{1 2 3}))
+  (is (= (run* [s] (containso s 1) (containso s 2)) [(ls #{1 2} '_0)]))
+  (is (= (run* [s] (fresh [x] (containso s x)))
+         `((~'_0 :- (containso ~'_0 ~'_1)))))
+  (is (= (run* [q] (lackso q 1) (containso q 1)) '())))
+
+(deftest test-containso-open-unknown-element
+  ;; 1, 2, or another element of the unknown rest
+  (is (= (run* [x] (fresh [s] (lseto s #{1 2} (lvar)) (containso s x)))
+         `(1 2 (~'_0 :- (containso ~(ls #{1 2} '_1) ~'_0) (~'!= (~'_0 1)) (~'!= (~'_0 2)))))))
+
+(deftest test-set-unify
+  (is (= (set (run* [x y] (== #{x y} #{1 2}))) #{[1 2] [2 1]}))
+  (is (= (run* [x y] (== #{x y} #{1})) '()))
+  (is (= (run* [q] (== #{[q 1]} #{[2 1]})) '(2))))
+
+(deftest test-set-elements-stay-distinct
+  (is (= (run* [q] (fresh [x y] (== q #{x y}) (== x 1) (== y 1))) '()))
+  (is (= (run* [q] (fresh [x y s] (== s #{x y}) (== x 1) (== y 1) (== q 1))) '())))
+
+(deftest test-disjo-conjo-set
+  (is (= (run* [out] (disjo #{1 2} 1 out)) '(#{2})))
+  (is (= (set (run* [s] (disjo s 1 #{2}))) #{#{1 2} #{2}}))
+  (is (= (run* [out] (conjo #{1} 2 out)) '(#{1 2})))
+  (is (= (set (run* [s] (conjo s 2 #{1 2}))) #{#{1 2} #{1}})))
+
+(deftest test-lseto
+  (is (= (run* [s] (lseto s #{1} #{2})) '(#{1 2})))
+  (is (= (set (run* [x r] (lseto #{1 2 3} #{x} r)))
+         #{[1 #{2 3}] [2 #{1 3}] [3 #{1 2}]})))
+
+(deftest test-set-algebra
+  (is (= (run* [out] (uniono #{1 2} #{2 3} out)) '(#{1 2 3})))
+  (is (= (run* [out] (intersectiono #{1 2} #{2 3} out)) '(#{2})))
+  (is (= (run* [out] (differenceo #{1 2} #{2 3} out)) '(#{1})))
+  (is (= (count (run* [a b] (uniono a b #{1 2}))) 9))
+  (is (= (set (run* [a] (differenceo a #{2 3} #{1})))
+         #{#{1} #{1 2} #{1 3} #{1 2 3}}))
+  (is (= (set (run* [a] (subseto a #{1 2}))) #{#{} #{1} #{2} #{1 2}}))
+  (is (= (run* [q] (subseto #{1 2} q)) [(ls #{1 2} '_0)]))
+  (is (= (run* [q] (disjointo #{1} q) (containso q 1)) '())))
+
+(deftest test-set-counto
+  (is (= (run* [n] (counto #{1 2} n)) '(2)))
+  (is (= (run* [s] (containso s 1) (counto s 1)) '(#{1}))))
+
+(deftest test-set-disequality
+  (is (= (run* [q] (!= #{q} #{1}) (== q 1)) '()))
+  (is (= (run* [q] (!= #{q} #{1}) (== q 2)) '(2))))
+
+(deftest test-set-tabled-copy-term
+  (let [g (tabled [s] (containso s 1))]
+    (is (= (run 2 [q] (g q)) [(ls #{1} '_0)])))
+  (is (= (run* [q] (fresh [s c] (containso s 1) (copy-term s c) (containso c 2) (lackso c 1) (== q c)))
+         '())))
+
+(deftest test-set-not-a-map
+  (is (= (run* [q] (fresh [s] (containso s 1) (== s {1 1}) (== q 1))) '()))
+  (is (= (run* [q] (fresh [s] (geto s 1 1) (== s #{1}) (== q 1))) '())))

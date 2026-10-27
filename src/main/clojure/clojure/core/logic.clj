@@ -3187,7 +3187,12 @@
 ;; -----------------------------------------------------------------------------
 ;; Distinct keys
 
-(declare map-parts)
+(declare map-parts coll-parts lset?)
+
+(defn- coll-keys
+  "The keys of map m, or the elements of set m."
+  [m]
+  (if (set? m) (seq m) (keys m)))
 
 (defn- -map-keysc
   "Constraint that the keys of map m stay pairwise distinct, rechecked
@@ -3203,7 +3208,7 @@
             ;; map-parts fails on equal keys and re-adds this constraint
             ;; for keys that are still not ground
             (when-let [s ((remcg this) s)]
-              (first (map-parts s m))))
+              (first (coll-parts s m))))
           IRunnable
           (-runnable? [_]
             (boolean (some #(not (lvar? (walk s %))) watch)))))
@@ -3215,7 +3220,7 @@
         ;; implied when the map itself is part of the answer
         (let [m' (walk* r (walk* a m))]
           (when-not (some #(= m' %) (tree-seq coll? seq v))
-            `(distincto ~(vec (keys m'))))))
+            `(distincto ~(vec (coll-keys m'))))))
       IConstraintWatchedStores
       (-watched-stores [_] #{::subst}))
     {::map-keys m}))
@@ -3224,7 +3229,7 @@
   "Constrains the keys of map m to stay distinct, unless that is already
    done. Takes and returns a substitution."
   [s m]
-  (let [watch (term-vars s (keys m))
+  (let [watch (term-vars s (coll-keys m))
         cs (:cs s)
         done? (some (fn [cid]
                       (identical? m (::map-keys (meta ((:cm cs) cid)))))
@@ -3244,7 +3249,7 @@
   (if (and (> links 1) (lvar? x))
     (let [root (root-var s x)
           sm (:s s)]
-      (if (lmap? (get sm root))
+      (if (let [v (get sm root)] (or (lmap? v) (lset? v)))
         (assoc s :s (assoc sm root term))
         s))
     s))
@@ -3323,12 +3328,12 @@
   "Checks the keys of maps that were just bound and are not all plain
    values: fails if two are equal, and keeps them distinct from now on."
   [s maps]
-  (reduce (fn [s m] (or (first (map-parts s m)) (reduced nil))) s maps))
+  (reduce (fn [s m] (or (first (coll-parts s m)) (reduced nil))) s maps))
 
 ;; -----------------------------------------------------------------------------
 ;; Absent keys
 
-(declare lmap-lacks lmap-lacks-ground)
+(declare lmap-lacks lmap-lacks-ground lset? lset-elems lset-rest)
 
 (defn- lmap-lacks-constraint
   "The lacks-constraint on the var x, if any. There is at most one."
@@ -3353,13 +3358,17 @@
               (map? t) (reduce implied acc (vals t))
               (coll? t) (reduce implied acc t)
               (lvec? t) (reduce implied acc (lvec-parts t))
+              (lset? t) (let [acc (reduce implied acc (lset-elems t))]
+                          (if (= (lset-rest t) sym)
+                            (into acc (lset-elems t))
+                            acc))
               :else acc))]
     (implied #{} v)))
 
 (defn- -lmap-lacksc
   "Constraint that the map the var x gets bound to has none of the ground
-   keys ks."
-  [x ks]
+   keys ks, or for kind :set, that the set has none of those elements."
+  [x ks kind]
   (with-meta
     (reify
       IConstraintStep
@@ -3367,12 +3376,12 @@
         (reify
           clojure.lang.IFn
           (invoke [_ s]
-            ((composeg (remcg this) (lmap-lacks-ground x ks)) s))
+            ((composeg (remcg this) (lmap-lacks-ground x ks kind)) s))
           IRunnable
           (-runnable? [_]
             (not (lvar? (walk s x))))))
       IConstraintOp
-      (-rator [_] `lacks-keyo)
+      (-rator [_] (if (= kind :set) `lackso `lacks-keyo))
       (-rands [_] [x])
       IReifiableConstraint
       (-reifyc [_ v r a]
@@ -3381,67 +3390,81 @@
         (let [sym (walk* r (walk* a x))]
           (when-not (lvar? sym)
             (when-let [shown (seq (remove (lmap-implied-keys v sym) ks))]
-              `(lacks-keyo ~sym ~@shown)))))
+              (if (= kind :set)
+                `(lackso ~sym ~@shown)
+                `(lacks-keyo ~sym ~@shown))))))
       IConstraintWatchedStores
       (-watched-stores [_] #{::subst}))
-    {::lmap-lacks ks}))
+    {::lmap-lacks ks ::lacks-kind kind}))
 
 (defn- lmap-ensure-lacks
   "Constrains the unbound var x to lack the ground keys ks. Keeps a single
    lacks-constraint per var, so a rest that is passed along keeps sharing
    one key set instead of collecting constraints. Takes and returns a
    substitution."
-  [s x ks]
-  (let [ks (if (set? ks) ks (set ks))
-        c (lmap-lacks-constraint s x)
-        have (::lmap-lacks (meta c))]
-    (cond
-      (nil? c) ((cgoal (-lmap-lacksc x ks)) s)
-      ;; grow the larger set by the smaller one
-      (> (count ks) (count have))
-      ((cgoal (-lmap-lacksc x (into ks have))) ((remcg c) s))
-      (every? #(contains? have %) ks) s
-      :else
-      ((cgoal (-lmap-lacksc x (into have ks))) ((remcg c) s)))))
+  ([s x ks]
+   (lmap-ensure-lacks s x ks nil))
+  ([s x ks kind]
+   (let [ks (if (set? ks) ks (set ks))
+         c (lmap-lacks-constraint s x)
+         have (::lmap-lacks (meta c))
+         kind (or kind (::lacks-kind (meta c)) :map)]
+     (cond
+       (nil? c) ((cgoal (-lmap-lacksc x ks kind)) s)
+       ;; grow the larger set by the smaller one
+       (> (count ks) (count have))
+       ((cgoal (-lmap-lacksc x (into ks have) kind)) ((remcg c) s))
+       (every? #(contains? have %) ks) s
+       :else
+       ((cgoal (-lmap-lacksc x (into have ks) kind)) ((remcg c) s))))))
 
 (declare lmap-await)
 
 (defn- lmap-lacks-ground
   "A goal that succeeds if the map x has none of the keys in the set ks,
-   which are ground. Never branches."
-  [x ks]
+   which are ground. Never branches. kind is :set if x is a set, nil if
+   that is not known."
+  [x ks kind]
   (fn [s]
-    (when-let [[s g n tail] (map-parts s x)]
+    (when-let [[s g n tail] (coll-parts s x)]
       (when-not (if (< (count g) (count ks))
-                  (some #(contains? ks %) (keys g))
+                  (some #(contains? ks %) (coll-keys g))
                   (some #(contains? g %) ks))
         ;; differ from the keys of x that are not ground
         (when-let [s (reduce (fn [s [k nk]] (or ((!= k nk) s) (reduced nil)))
                              s (for [[nk] n, k ks] [k nk]))]
           (if (and tail (seq ks))
-            (lmap-ensure-lacks s tail ks)
+            (let [v (walk s x)
+                  kind (cond
+                         (or (set? v) (lset? v)) :set
+                         (or (map? v) (lmap? v)) :map
+                         :else kind)]
+              (lmap-ensure-lacks s tail ks kind))
             s))))))
 
 (defn- lmap-lacks
-  "A goal that succeeds if the map x has none of the keys ks. Never
-   branches, so it can run inside the constraint solver."
-  [x ks]
+  "A goal that succeeds if the map x has none of the keys ks, or for kind
+   :set, the set x has none of the elements ks. Never branches, so it can
+   run inside the constraint solver."
+  ([x ks] (lmap-lacks x ks nil))
+  ([x ks kind]
   (fn [s]
     (let [ks (map #(walk* s %) ks)
           ground (set (filter ground-key? ks))
           nonground (remove ground-key? ks)]
       (if (empty? nonground)
-        ((lmap-lacks-ground x ground) s)
-        (when-let [[s g n tail] (map-parts s x)]
+        ((lmap-lacks-ground x ground kind) s)
+        (when-let [[s g n tail] (coll-parts s x)]
           (let [goals (concat
                        ;; differ from the keys of x that are not ground
                        (for [k nonground, [nk] n] (!= k nk))
                        ;; and from its ground keys and rest, once ground
                        (when (or (seq g) tail)
                          (for [k nonground]
-                           (lmap-await `lacks-keyo [x k] k #(lmap-lacks x [k])))))]
+                           (lmap-await (if (= kind :set) `lackso `lacks-keyo) [x k] k
+                                     #(lmap-lacks x [k] kind)))))]
             (when-let [s (reduce (fn [s g] (or (g s) (reduced nil))) s goals)]
-              ((lmap-lacks-ground x ground) s))))))))
+              ((lmap-lacks-ground x ground kind) s)))))))))
 
 (defn- lmap-extendo
   "A goal where map x is the entries, whose keys are ground, plus the map r,
@@ -3824,7 +3847,7 @@
           (case (or (coll-kind s m') (key-kind k'))
             :map ((as-map) s)
             :seq (when (or (lvar? k') (index? k')) ((as-seq) s))
-            :other nil
+            (:other :set) nil
             :either (lmap-pend s `geto args #(geto m k v) [m k] true
                                {:force #(conde [(as-map)] [(as-seq)])})
             ((lmap-suspend `geto args #(geto m k v) [m k]) s)))))))
@@ -3851,7 +3874,7 @@
       (case (or (coll-kind s m) (coll-kind s out) (key-kind k'))
         :map ((map-assoco m k v out) s)
         :seq (when (or (lvar? k') (index? k')) ((seq-assoco m k v out) s))
-        :other nil
+        (:other :set) nil
         :either (lmap-pend s `assoco args #(assoco m k v out) [m k out] true
                            {:force #(conde [(map-assoco m k v out)]
                                            [(seq-assoco m k v out)])})
@@ -4678,11 +4701,11 @@
   [s x]
   (let [x (walk s x)]
     (cond
-      (lvar? x) (cond
-                  (lmap-lacks-constraint s x) :map
-                  (mid-len-link s x) :seq
-                  :else nil)
+      (lvar? x) (if-let [c (lmap-lacks-constraint s x)]
+                  (::lacks-kind (meta c))
+                  (when (mid-len-link s x) :seq))
       (or (map? x) (lmap? x)) :map
+      (or (set? x) (lset? x)) :set
       (or (sequential? x) (lcons? x) (lvec? x)) :seq
       :else :other)))
 
@@ -4692,7 +4715,9 @@
   [s x]
   (let [x (walk s x)]
     (cond
-      (lvar? x) (when (lmap-lacks-constraint s x) :map)
+      (lvar? x) (when-let [c (lmap-lacks-constraint s x)]
+                  (::lacks-kind (meta c)))
+      (or (set? x) (lset? x)) :set
       (or (vector? x) (lvec? x)) :vec
       (or (lcons? x) (sequential? x)) :list
       (or (map? x) (lmap? x)) :map
@@ -4712,7 +4737,7 @@
         (when (< i' (count v'))
           ((== x (nth v' i')) s))
         (case (coll-kind s v')
-          (:map :other) nil
+          (:map :set :other) nil
           ((seq-splito v i nil x nil `ntho [v i x]) s))))))
 
 (defn- seq-counto [c n]
@@ -4733,7 +4758,7 @@
 
           :else nil)))))
 
-(declare counto)
+(declare counto set-counto set-conjo)
 
 (defn- map-counto [c n]
   (fn [s]
@@ -4756,6 +4781,7 @@
     (case (coll-kind s c)
       :seq ((seq-counto c n) s)
       :map ((map-counto c n) s)
+      :set ((set-counto c n) s)
       :other nil
       ((lmap-suspend `counto [c n] #(counto c n) [c]) s))))
 
@@ -4795,6 +4821,7 @@
        :vec ((seq-conjo c x out) s)
        :list ((== out (lcons x c)) s)
        :map ((fresh [k v] (== x [k v]) (assoco c k v out)) s)
+       :set ((set-conjo c x out) s)
        :other nil
        ((lmap-suspend `conjo [c x out] #(conjo c x out) [c out]) s))))
   ([c x y & more]
@@ -4810,7 +4837,7 @@
     (case (conj-kind s c)
       :vec ((fresh [out] (seq-popo c out x `peeko [c x])) s)
       :list ((fresh [d] (== c (lcons x d))) s)
-      (:map :other) nil
+      (:map :set :other) nil
       ((lmap-suspend `peeko [c x] #(peeko c x) [c]) s))))
 
 (defn popo
@@ -4821,7 +4848,7 @@
     (case (or (conj-kind s c) (conj-kind s out))
       :vec ((fresh [x] (seq-popo c out x `popo [c out])) s)
       :list ((fresh [x] (== c (lcons x out))) s)
-      (:map :other) nil
+      (:map :set :other) nil
       ((lmap-suspend `popo [c out] #(popo c out) [c out]) s))))
 
 (defn concato
@@ -4897,7 +4924,7 @@
       (case (or (coll-kind s m) (key-kind k'))
         :map ((lacks-keyo m k) s)
         :seq ((counto m k) s)
-        :other nil
+        (:other :set) nil
         :either (lmap-pend s `missingo [m k] #(missingo m k) [m k] true
                            {:force #(conde [(lacks-keyo m k)] [(counto m k)])})
         ((lmap-suspend `missingo [m k] #(missingo m k) [m k]) s)))))
@@ -4933,6 +4960,480 @@
                    [(geto m' k x)]
                    [(missingo m' k) (== x nil)])
                   (assoc-ino x more v x'))])))
+
+;; =============================================================================
+;; LSet - Relational Sets
+;;
+;; Sets are relational like maps, and work much like maps whose keys are
+;; their elements. Elements of a set term are pairwise distinct, so #{x y}
+;; denotes a set of two elements and fails once x and y become equal, and
+;; unifying sets whose elements are not all ground branches over which
+;; elements pair up. An LSet is an open set: known elements plus a rest, a
+;; logic var standing for the set of all other elements. Like the keys of an
+;; LMap, the elements of an LSet are always ground; a set whose elements are
+;; not is always closed. LSets appear in answers as (lset #{elements} | rest).
+
+(declare unify-set-terms lset*)
+
+(deftype LSet [elems rest ^{:unsynchronized-mutable true :tag int} cache]
+  ITreeTerm
+
+  clojure.lang.IObj
+  (meta [this] nil)
+  (withMeta [this new-meta] this)
+
+  Object
+  (toString [this]
+    (str "(lset " elems " | " rest ")"))
+
+  (equals [this o]
+    (or (identical? this o)
+        (and (instance? LSet o)
+             (= elems (.elems ^LSet o))
+             (= rest (.rest ^LSet o)))))
+
+  (hashCode [this]
+    (if (clojure.core/== cache -1)
+      (do
+        (set! cache (int (clojure.lang.Util/hash [elems rest])))
+        cache)
+      cache))
+
+  IUnifyTerms
+  (unify-terms [u v s]
+    (when (or (set? v) (instance? LSet v))
+      (unify-set-terms u v s)))
+
+  IReifyTerm
+  (reify-term [v s]
+    (-reify* (reduce -reify* s elems) rest))
+
+  IWalkTerm
+  (walk-term [v f]
+    (let [es (into #{} (map #(walk-term (f %) f)) elems)
+          r (walk-term (f rest) f)]
+      ;; a rest repeating a known element denotes no set
+      (when (and (set? r) (some #(contains? es %) r))
+        (map-keys-collided!))
+      (lset* es r)))
+
+  IOccursCheckTerm
+  (occurs-check-term [v x s]
+    (boolean (or (some #(occurs-check s x %) elems)
+                 (occurs-check s x rest))))
+
+  IBuildTerm
+  (build-term [u s]
+    (build (reduce build s elems) rest)))
+
+(defmethod print-method LSet [x ^Writer writer]
+  (.write writer (str x)))
+
+(defn lset?
+  "Returns true if x is an LSet, an open set in an answer."
+  [x]
+  (instance? LSet x))
+
+(defn lset-elems
+  "Returns the known elements of an LSet, or the set itself if not an LSet."
+  [x]
+  (if (lset? x) (.elems ^LSet x) x))
+
+(defn lset-rest
+  "Returns the rest (unknown elements) of an LSet, or nil."
+  [x]
+  (if (lset? x) (.rest ^LSet x) nil))
+
+(defn- lset*
+  "Normal form of the set with the given elements and rest: a plain set if
+   rest is nil or a set, the rest itself if there are no elements,
+   otherwise an LSet whose rest is not itself a set."
+  [elems rest]
+  (cond
+    (nil? rest) elems
+    (set? rest) (into elems rest)
+    (lset? rest) (lset* (into elems (.elems ^LSet rest)) (.rest ^LSet rest))
+    (and (empty? elems) (lvar? rest)) rest
+    :else (LSet. elems rest -1)))
+
+(defn- set-parts
+  "Walks x in s and splits the set it denotes into [s ground nonground
+   tail], as map-parts does for maps: the ground elements (a set), the
+   elements that are not ground yet (a vector of pairs [e e], as keys
+   mapped to themselves), and the open tail, an unbound var or nil for a
+   closed set. Returns nil if x is not a set or two of its elements are
+   equal."
+  [s x0]
+  (letfn [(add-ground [g es]
+            ;; disjoint union, without copying either set when possible
+            (cond
+              (empty? g) es
+              (empty? es) g
+              (< (count g) (count es))
+              (when (not-any? #(contains? es %) g) (into es g))
+              :else
+              (when (not-any? #(contains? g %) es) (into g es))))]
+    (loop [x (walk s x0) g #{} links 0]
+      (cond
+        (lvar? x) [(if (> links 1) (compress-map s x0 links (lset* g x)) s) g [] x]
+        (lset? x) (when-let [g (add-ground g (.elems ^LSet x))]
+                    (recur (walk s (.rest ^LSet x)) g (inc links)))
+        (set? x) (if (every? atomic-key? x)
+                   (when-let [g (add-ground g x)]
+                     [(if (> links 1) (compress-map s x0 links g) s) g [] nil])
+                   (let [es (map #(walk* s %) x)
+                         ground (filter ground-key? es)
+                         nonground (vec (remove ground-key? es))
+                         g' (set ground)]
+                     (when (clojure.core/== (count g') (count ground))
+                       (when-let [g (add-ground g g')]
+                         (let [n (mapv (fn [e] [e e]) nonground)]
+                           (if (and (seq nonground) (> (count x) 1))
+                             (when-let [s (ensure-distinct-keys s x)]
+                               [s g n nil])
+                             [s g n nil]))))))
+        :else nil))))
+
+(defn- coll-parts
+  "map-parts for maps, set-parts for sets."
+  [s x]
+  (let [v (walk s x)]
+    (if (or (set? v) (lset? v))
+      (set-parts s x)
+      (map-parts s x))))
+
+(defn- set-term
+  "The set term with ground elements g, nonground elements n and tail."
+  [g n tail]
+  (if (seq n)
+    (into g (map first n))
+    (lset* g tail)))
+
+(defn- set-term-without
+  "The set term [g n tail] without the element e."
+  [g n tail e]
+  (if (contains? g e)
+    (set-term (disj g e) n tail)
+    (set-term g (vec (remove #(= e (first %)) n)) tail)))
+
+(defn- set-lacks
+  "A goal that succeeds if the set x has none of the elements es."
+  [x es]
+  (lmap-lacks x es :set))
+
+(defn- set-extendo
+  "A goal where set x is the elements es, which are ground, plus the set r,
+   which lacks them."
+  [x es r]
+  (all
+   (set-lacks r es)
+   (fn [s] ((== x (lset* es (walk s r))) s))))
+
+(defn- set-picko
+  "A relation where set t is the set t' plus the element x, and t' lacks x.
+   Enumerates the elements of t if x is not ground. A nil t' means the
+   remainder is not wanted. While it waits, it reifies as rel on args."
+  [t x t' rel args]
+  (fn [s]
+    (when-let [[s g n tail] (set-parts s t)]
+      (let [x' (walk* s x)
+            remainder (fn [e]
+                        (if t'
+                          (fn [s] ((== t' (set-term-without g n tail e)) s))
+                          succeed))]
+        (cond
+          ;; nothing known about t
+          (lvar? (walk s t))
+          (if (ground-key? x')
+            ((set-extendo t #{x'} (or t' (lvar 'rest))) s)
+            ;; an element that is not ground fits only into a closed set
+            (let [[_ g' n' tail' :as parts'] (set-parts s (or t' (lvar 'rest)))]
+              (cond
+                (nil? parts') nil
+                (nil? tail') ((all (set-lacks t' [x'])
+                                   (== t (conj (set-term g' n' nil) x')))
+                              s)
+                :else ((lmap-suspend rel args #(set-picko t x t' rel args) [t x t']) s))))
+
+          (and (ground-key? x') (contains? g x'))
+          ((remainder x') s)
+
+          :else
+          ((or-goals
+            (concat
+             ;; one of the known elements
+             (for [e (concat (if (ground-key? x') [] g) (map first n))]
+               (all (== x e)
+                    (remainder e)))
+             ;; or an element of the unknown rest
+             (when tail
+               [(fresh [tail']
+                       (everyg #(!= x %) (if (ground-key? x') [] g))
+                       (set-picko tail x (when t' tail') rel args)
+                       (if t' (set-extendo t' g tail') succeed))])))
+           s))))))
+
+(defn- set-pick-each
+  "A relation where set m is the elements es (distinct) plus the set rest,
+   which lacks them. Picks one element at a time."
+  [es rest m rel args]
+  (if-let [[e & more] (seq es)]
+    (fresh [m']
+           (set-picko m e m' rel args)
+           (set-pick-each more rest m' rel args))
+    (== m rest)))
+
+(defn- unify-set-parts
+  "Unifies two sets given as ground elements and tails."
+  [gu tu gv tv s]
+  (let [only-u (set (remove #(contains? gv %) gu))
+        only-v (set (remove #(contains? gu %) gv))]
+    (cond
+      (and (nil? tu) (nil? tv))
+      (when (and (empty? only-u) (empty? only-v)) s)
+
+      (nil? tu)
+      (when (empty? only-v) (unify s tv only-u))
+
+      (nil? tv)
+      (when (empty? only-u) (unify s tu only-v))
+
+      ;; same rest on both sides: the known elements must be the same too
+      (= tu tv)
+      (when (and (empty? only-u) (empty? only-v)) s)
+
+      ;; each rest holds the other side's extra elements plus a shared rest
+      :else
+      (let [r (lvar 'rest)]
+        (when-let [s (lmap-ensure-lacks s r (into gu gv) :set)]
+          (when-let [s (unify s tu (lset* only-v r))]
+            (unify s tv (lset* only-u r))))))))
+
+(defn- set-unifyo
+  "A relation where the set terms u and v are equal, for sets whose
+   elements are not all ground."
+  [u v]
+  (fn [s]
+    (when-let [[s g n tail] (set-parts s u)]
+      ((set-pick-each (concat g (map first n)) (or tail #{}) v `== [u v]) s))))
+
+(defn unify-set-terms
+  "Unifies two set terms (plain sets or LSets). If not all elements are
+   ground, the unification branches over which elements pair up."
+  [u v s]
+  (when-let [[s gu nu tu] (set-parts s u)]
+    (when-let [[s gv nv tv] (set-parts s v)]
+      (if (or (seq nu) (seq nv))
+        (lmap-commit s `== [u v] #(set-unifyo u v))
+        (unify-set-parts gu tu gv tv s)))))
+
+(extend-protocol IUnifyTerms
+  clojure.lang.IPersistentSet
+  (unify-terms [u v s]
+    (cond
+      (and (set? v) (every? atomic-key? u) (every? atomic-key? v))
+      (when (= u v) s)
+
+      (or (set? v) (lset? v)) (unify-set-terms u v s)
+      :else nil)))
+
+(extend-protocol IWalkTerm
+  clojure.lang.IPersistentSet
+  (walk-term [v f]
+    (let [r (into (empty v) (map #(walk-term (f %) f)) v)]
+      ;; elements that became equal denote no set
+      (when-not (clojure.core/== (count r) (count v))
+        (map-keys-collided!))
+      (with-meta r (meta v)))))
+
+(extend-protocol IOccursCheckTerm
+  clojure.lang.IPersistentSet
+  (occurs-check-term [v x s]
+    (when-not (every? atomic-key? v)
+      ;; ext checks the elements of this set once it is bound
+      (note-keyed-map v))
+    (boolean (some #(occurs-check s x %) v))))
+
+(extend-protocol IDisunifyTerms
+  clojure.lang.IPersistentSet
+  (-disunify-terms [u v s cs]
+    (cond
+      (lset? v) (-disunify-terms v u s cs)
+      (and (set? v) (every? atomic-key? u) (every? atomic-key? v))
+      (when (= u v) cs)
+      ;; keep the pair whole, as for maps
+      (and (set? v) (unify s u v))
+      (assoc cs :prefixc (assoc (:prefixc cs) u v))
+      :else nil))
+
+  LSet
+  (-disunify-terms [u v s cs]
+    (when (and (or (set? v) (lset? v)) (unify s u v))
+      (assoc cs :prefixc (assoc (:prefixc cs) u v)))))
+
+;; -----------------------------------------------------------------------------
+;; Relations
+
+(defn lseto
+  "A relation where set s consists of the elements of the set elems plus
+   the set rest, which has none of them. The elements of elems may be
+   unbound."
+  [s elems rest]
+  (fn [a]
+    (let [es (map #(walk* a %) (walk a elems))]
+      ((set-pick-each es rest s `lseto [s elems rest]) a))))
+
+(defn containso
+  "A relation where set s contains x, i.e. (contains? s x). Enumerates the
+   elements of s if x is unbound."
+  [s x]
+  (fn [a]
+    (let [s' (walk a s)
+          x' (walk* a x)]
+      (if (and (set? s') (atomic-key? x') (contains? s' x'))
+        a
+        ((set-picko s x nil `containso [s x]) a)))))
+
+(defn lackso
+  "A relation where set s has none of the elements xs."
+  [s & xs]
+  (set-lacks s xs))
+
+(defn disjo
+  "A relation where out is (disj s x)."
+  [s x out]
+  (conde
+   [(set-picko s x out `disjo [s x out])]
+   [(set-lacks s [x]) (== s out)]))
+
+(defn- set-conjo
+  "A relation where out is (conj s x) for a set s."
+  [s x out]
+  (fresh [s']
+         (disjo s x s')
+         (set-picko out x s' `conjo [s x out])))
+
+(defn- set-elems
+  "The elements of the set x, or nil if it is not closed."
+  [a x]
+  (when-let [[a g n tail] (set-parts a x)]
+    (when (nil? tail)
+      (concat g (map first n)))))
+
+(defn- set-filtero
+  "A relation where out is the set of the elements es for which (in? e)
+   holds; (out? e) holds for each of the others."
+  [es in? out? acc out]
+  (if-let [[e & more] (seq es)]
+    (conde
+     [(in? e) (set-filtero more in? out? (conj acc e) out)]
+     [(out? e) (set-filtero more in? out? acc out)])
+    (== out (set acc))))
+
+(defn- set-conj-allo
+  "A relation where out is the set s with all elements es added."
+  [s es out]
+  (if-let [[e & more] (seq es)]
+    (fresh [s']
+           (set-conjo s e s')
+           (set-conj-allo s' more out))
+    (== s out)))
+
+(defn- set-covero
+  "A relation where the sets a and b together hold exactly the elements es:
+   each is in a, in b, or in both."
+  [es acc-a acc-b a b]
+  (if-let [[e & more] (seq es)]
+    (conde
+     [(set-covero more (conj acc-a e) acc-b a b)]
+     [(set-covero more acc-a (conj acc-b e) a b)]
+     [(set-covero more (conj acc-a e) (conj acc-b e) a b)])
+    (all (== a (set acc-a)) (== b (set acc-b)))))
+
+(defn- plain-set
+  "x walked, if it is a set of plain values."
+  [s x]
+  (let [v (walk s x)]
+    (when (and (set? v) (every? atomic-key? v))
+      v)))
+
+(defn subseto
+  "A relation where set a is a subset of set b. Lists the subsets of b if
+   only b is closed."
+  [a b]
+  (fn [s]
+    (if-let [es (set-elems s a)]
+      ((everyg #(containso b %) es) s)
+      (if-let [bs (set-elems s b)]
+        ((set-filtero bs (constantly succeed) (constantly succeed) [] a) s)
+        ((lmap-suspend `subseto [a b] #(subseto a b) [a b]) s)))))
+
+(defn disjointo
+  "A relation where the sets a and b have no element in common."
+  [a b]
+  (fn [s]
+    (if-let [es (set-elems s a)]
+      ((set-lacks b es) s)
+      (if-let [bs (set-elems s b)]
+        ((set-lacks a bs) s)
+        ((lmap-suspend `disjointo [a b] #(disjointo a b) [a b]) s)))))
+
+(defn uniono
+  "A relation where out is (clojure.set/union a b). Lists every way to
+   split out if only out is closed."
+  [a b out]
+  (fn [s]
+    (if-let [[pa pb] (let [pa (plain-set s a) pb (plain-set s b)] (when (and pa pb) [pa pb]))]
+      ((== out (clojure.set/union pa pb)) s)
+    (if-let [es (set-elems s a)]
+      ((set-conj-allo b es out) s)
+      (if-let [es (set-elems s b)]
+        ((set-conj-allo a es out) s)
+        (if-let [es (set-elems s out)]
+          ((set-covero es [] [] a b) s)
+          ((lmap-suspend `uniono [a b out] #(uniono a b out) [a b out]) s)))))))
+
+(defn intersectiono
+  "A relation where out is (clojure.set/intersection a b)."
+  [a b out]
+  (fn [s]
+    (if-let [[pa pb] (let [pa (plain-set s a) pb (plain-set s b)] (when (and pa pb) [pa pb]))]
+      ((== out (clojure.set/intersection pa pb)) s)
+    (if-let [es (set-elems s a)]
+      ((set-filtero es #(containso b %) #(lackso b %) [] out) s)
+      (if-let [es (set-elems s b)]
+        ((set-filtero es #(containso a %) #(lackso a %) [] out) s)
+        ((lmap-suspend `intersectiono [a b out] #(intersectiono a b out) [a b out]) s))))))
+
+(defn differenceo
+  "A relation where out is (clojure.set/difference a b)."
+  [a b out]
+  (fn [s]
+    (if-let [[pa pb] (let [pa (plain-set s a) pb (plain-set s b)] (when (and pa pb) [pa pb]))]
+      ((== out (clojure.set/difference pa pb)) s)
+    (if-let [es (set-elems s a)]
+      ((set-filtero es #(lackso b %) #(containso b %) [] out) s)
+      (if-let [bs (set-elems s b)]
+        ;; a is out plus the elements of b it has
+        ((fresh [c]
+                (disjointo out b)
+                (set-filtero bs (constantly succeed) (constantly succeed) [] c)
+                (uniono c out a))
+         s)
+        ((lmap-suspend `differenceo [a b out] #(differenceo a b out) [a b out]) s))))))
+
+(defn- set-counto [c n]
+  (fn [s]
+    (when-let [[s g nn tail] (set-parts s c)]
+      (let [k (+ (count g) (count nn))
+            n' (walk s n)]
+        (cond
+          (nil? tail) ((== n k) s)
+          (integer? n') (cond
+                          (< n' k) nil
+                          (clojure.core/== n' k) ((== tail #{}) s)
+                          :else ((lmap-suspend `counto [c n] #(set-counto c n) [c n]) s))
+          :else ((lmap-suspend `counto [c n] #(set-counto c n) [c n]) s))))))
 
 ;; =============================================================================
 ;; miniKanren parity: defrel, type constraints, absento

@@ -94,12 +94,36 @@ vectors, in every direction:
 | `(get-ino m ks v)` | `(get-in m ks)` is `v`, and the path `ks` exists |
 | `(assoc-ino m ks v out)` | `out` is `(assoc-in m ks v)`; missing levels become maps, as in Clojure |
 
+**Relational sets (done, JVM).** Open sets hold known elements plus an unknown
+rest; set literals may hold unknown elements, which stay distinct:
+
+```clojure
+(run* [s] (containso s 1) (containso s 2))
+;;=> ((lset #{1 2} | _0))
+
+(run* [x y] (== #{x y} #{1 2}))
+;;=> ([1 2] [2 1])
+
+(run* [a b] (uniono a b #{1 2}))      ;; all 9 ways to split #{1 2}
+```
+
+| Relation | Means |
+|---|---|
+| `(containso s x)` / `(lackso s & xs)` | `(contains? s x)` / none of `xs` |
+| `(conjo s x out)` / `(disjo s x out)` | `(conj s x)` / `(disj s x)` |
+| `(lseto s elems rest)` | `s` is `elems` plus a set `rest` without them |
+| `uniono`, `intersectiono`, `differenceo` | `clojure.set/union`, `intersection`, `difference` |
+| `(subseto a b)` / `(disjointo a b)` | `a ⊆ b` / no common element |
+| `(counto s n)` | `(count s)` is `n` |
+
+See [the sets post](docs/blog/07-sets.md).
+
 **miniKanren parity.** `defrel`, the type constraints `symbolo`, `numbero` and
 `stringo`, and `absento`, with faster-miniKanren's semantics: conflicting
 types fail while the variable is still unbound.
 
-**Later:** records as data-level types (schema inference run backwards), relational sets, and the
-ClojureScript port.
+**Later:** records as data-level types (schema inference run backwards), and
+the ClojureScript port.
 
 The posts
 ----
@@ -116,6 +140,7 @@ The posts
    where this sits in the research, and what core.logic still lacks.
 6. [Towards relational hyperdimensional computing](docs/blog/06-relational-hdc.md):
    the same data structures, encoded as hypervectors.
+7. [Sets](docs/blog/07-sets.md): maps without values, and what that buys.
 
 Using it
 ----
@@ -145,6 +170,9 @@ Changes from upstream
   gives `(lmap {0 1} | _0)` and `(lvec [1] | _0 | [])`.
 - Plain maps with logic variables as keys unify relationally; upstream
   treated such keys as plain values.
+- Sets are terms now. Upstream treated a set as an opaque value: logic
+  variables inside it were never bound or reified. Now `(== #{x} #{1})` binds
+  `x`, and sets with unknown elements unify relationally.
 
 ----
 
