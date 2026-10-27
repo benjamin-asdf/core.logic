@@ -54,7 +54,7 @@ A membership question on an open set gets every honest answer, including
 
 ```clojure
 (run* [x] (fresh [s] (lseto s #{1 2} (lvar)) (containso s x)))
-;;=> (1 2 (_0 :- (containso (lset #{1 2} | _1) _0) (!= (_0 1)) (!= (_0 2))))
+;;=> (1 2 (_0 :- (clojure.core.logic/containso (lset #{1 2} | _1) _0) (!= (_0 1)) (!= (_0 2))))
 ```
 
 ## Set algebra
