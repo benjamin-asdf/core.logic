@@ -1,6 +1,6 @@
 # core.logic — relational data fork
 
-Benjamin's fork making Clojure maps, vectors and sets relational. What exists: README.md; blog series: docs/blog/ (01 maps … 08 side by side with miniKanren); parked work: docs/future-work.md.
+Benjamin's fork making Clojure maps, vectors and sets relational. What exists: README.md; blog series "My core.logic fork": docs/blog/ (index README.md; 01 maps … 08 side by side with miniKanren); parked work: docs/future-work.md.
 
 ## Hard rule
 

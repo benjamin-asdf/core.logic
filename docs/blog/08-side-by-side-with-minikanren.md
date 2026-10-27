@@ -1,7 +1,6 @@
 # Side by side with miniKanren
 
-*Part 8 of a series on my core.logic fork. [Overview](../../README.md) ·
-[Part 7](07-sets.md)*
+*My core.logic fork, part 8 of 8.* [Index](README.md) · [← Sets](07-sets.md)
 
 faster-miniKanren is the reference miniKanren: the one used for the quine
 papers, program synthesis and *The Reasoned Schemer*'s second edition. This

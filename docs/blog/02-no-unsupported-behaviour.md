@@ -1,7 +1,6 @@
 # No unsupported behaviour
 
-*Part 2 of a series on my core.logic fork. [Overview](../../README.md) ·
-[Part 1](01-relational-maps.md)*
+*My core.logic fork, part 2 of 8.* [Index](README.md) · [← Relational maps for core.logic](01-relational-maps.md) · [Making it fast →](03-making-it-fast.md)
 
 The first version of relational maps in this fork worked for the queries I
 had in mind. When I went through it systematically, mode by mode, it had gaps:

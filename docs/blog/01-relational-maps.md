@@ -1,6 +1,6 @@
 # Relational maps for core.logic
 
-*Part 1 of a series on my core.logic fork. [Overview](../../README.md)*
+*My core.logic fork, part 1 of 8.* [Index](README.md) · [No unsupported behaviour →](02-no-unsupported-behaviour.md)
 
 miniKanren grew up on lists. `appendo` runs forwards and backwards, `membero`
 enumerates, and the whole thing works because a list that is only partly known

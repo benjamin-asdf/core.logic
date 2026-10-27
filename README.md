@@ -141,6 +141,8 @@ the ClojureScript port. See [future work](docs/future-work.md).
 The posts
 ----
 
+The series *My core.logic fork* ([index](docs/blog/README.md)):
+
 1. [Relational maps](docs/blog/01-relational-maps.md): a tour of the API.
 2. [No unsupported behaviour](docs/blog/02-no-unsupported-behaviour.md): why
    the design had to be redone, and how unknown keys, lazy checks and
