@@ -3586,23 +3586,23 @@
    run inside the constraint solver."
   ([x ks] (lmap-lacks x ks nil))
   ([x ks kind]
-  (fn [s]
-    (let [ks (map #(walk* s %) ks)
-          ground (set (filter ground-key? ks))
-          nonground (remove ground-key? ks)]
-      (if (empty? nonground)
-        ((lmap-lacks-ground x ground kind) s)
-        (when-let [[s g n tail] (coll-parts s x)]
-          (let [goals (concat
+   (fn [s]
+     (let [ks (map #(walk* s %) ks)
+           ground (set (filter ground-key? ks))
+           nonground (remove ground-key? ks)]
+       (if (empty? nonground)
+         ((lmap-lacks-ground x ground kind) s)
+         (when-let [[s g n tail] (coll-parts s x)]
+           (let [goals (concat
                        ;; differ from the keys of x that are not ground
-                       (for [k nonground, [nk] n] (!= k nk))
+                        (for [k nonground, [nk] n] (!= k nk))
                        ;; and from its ground keys and rest, once ground
-                       (when (or (seq g) tail)
-                         (for [k nonground]
-                           (lmap-await (if (= kind :set) `lackso `lacks-keyo) [x k] k
-                                     #(lmap-lacks x [k] kind)))))]
-            (when-let [s (reduce (fn [s g] (or (g s) (reduced nil))) s goals)]
-              ((lmap-lacks-ground x ground kind) s)))))))))
+                        (when (or (seq g) tail)
+                          (for [k nonground]
+                            (lmap-await (if (= kind :set) `lackso `lacks-keyo) [x k] k
+                                        #(lmap-lacks x [k] kind)))))]
+             (when-let [s (reduce (fn [s g] (or (g s) (reduced nil))) s goals)]
+               ((lmap-lacks-ground x ground kind) s)))))))))
 
 (defn- lmap-extendo
   "A goal where map x is the entries, whose keys are ground, plus the map r,
@@ -3793,8 +3793,8 @@
   [es rest m rel args]
   (if-let [[[k x] & more] (seq es)]
     (fresh [m']
-      (lmap-picko m k x m' rel args)
-      (lmap-pick-each more rest m' rel args))
+           (lmap-picko m k x m' rel args)
+           (lmap-pick-each more rest m' rel args))
     (== m rest)))
 
 (defn- lmap-take-ground
@@ -3817,8 +3817,8 @@
                 ;; may be under a key of m that is not ground yet
                 (seq nm) (lmap-pick-each (seq missing) m' left rel args)
                 tail (fresh [tail']
-                       (lmap-extendo tail missing tail')
-                       (lmap-extendo m' (apply dissoc gm (map key present)) tail'))
+                            (lmap-extendo tail missing tail')
+                            (lmap-extendo m' (apply dissoc gm (map key present)) tail'))
                 :else fail))
              s)))))))
 
@@ -3829,8 +3829,8 @@
   (let [ground (into {} (filter (comp ground-key? first) es))
         nonground (remove (comp ground-key? first) es)]
     (fresh [m']
-      (lmap-take-ground m ground m' rel args)
-      (lmap-pick-each nonground rest m' rel args))))
+           (lmap-take-ground m ground m' rel args)
+           (lmap-pick-each nonground rest m' rel args))))
 
 (defn- walk-keys
   "The entries of map es, with their keys walked."
@@ -4098,8 +4098,8 @@
       ((fn remove-each [xs ys]
          (if-let [[y & more] (seq ys)]
            (fresh [xs*]
-             (rembero y xs xs*)
-             (remove-each xs* more))
+                  (rembero y xs xs*)
+                  (remove-each xs* more))
            (== xs ())))
        (or (seq xs) ()) ys))))
 
@@ -4126,8 +4126,8 @@
   [xs l out]
   (if-let [[x & more] (seq xs)]
     (fresh [l']
-      (rembero x l l')
-      (lmap-remove-each more l' out))
+           (rembero x l l')
+           (lmap-remove-each more l' out))
     (== l out)))
 
 (defn valso
@@ -5452,11 +5452,12 @@
          (set-picko out x s' `conjo [s x out])))
 
 (defn- set-elems
-  "The elements of the set x, or nil if it is not closed."
+  "[a' elems]: the elements of the set x, and a extended with the
+   constraint keeping its elements distinct; nil if x is not closed."
   [a x]
   (when-let [[a g n tail] (set-parts a x)]
     (when (nil? tail)
-      (concat g (map first n)))))
+      [a (concat g (map first n))])))
 
 (defn- set-filtero
   "A relation where out is the set of the elements es for which (in? e)
@@ -5500,9 +5501,9 @@
    only b is closed."
   [a b]
   (fn [s]
-    (if-let [es (set-elems s a)]
+    (if-let [[s es] (set-elems s a)]
       ((everyg #(containso b %) es) s)
-      (if-let [bs (set-elems s b)]
+      (if-let [[s bs] (set-elems s b)]
         ((set-filtero bs (constantly succeed) (constantly succeed) [] a) s)
         ((lmap-suspend `subseto [a b] #(subseto a b) [a b]) s)))))
 
@@ -5510,9 +5511,9 @@
   "A relation where the sets a and b have no element in common."
   [a b]
   (fn [s]
-    (if-let [es (set-elems s a)]
+    (if-let [[s es] (set-elems s a)]
       ((set-lacks b es) s)
-      (if-let [bs (set-elems s b)]
+      (if-let [[s bs] (set-elems s b)]
         ((set-lacks a bs) s)
         ((lmap-suspend `disjointo [a b] #(disjointo a b) [a b]) s)))))
 
@@ -5523,13 +5524,13 @@
   (fn [s]
     (if-let [[pa pb] (let [pa (plain-set s a) pb (plain-set s b)] (when (and pa pb) [pa pb]))]
       ((== out (clojure.set/union pa pb)) s)
-    (if-let [es (set-elems s a)]
-      ((set-conj-allo b es out) s)
-      (if-let [es (set-elems s b)]
-        ((set-conj-allo a es out) s)
-        (if-let [es (set-elems s out)]
-          ((set-covero es [] [] a b) s)
-          ((lmap-suspend `uniono [a b out] #(uniono a b out) [a b out]) s)))))))
+      (if-let [[s es] (set-elems s a)]
+        ((set-conj-allo b es out) s)
+        (if-let [[s es] (set-elems s b)]
+          ((set-conj-allo a es out) s)
+          (if-let [[s es] (set-elems s out)]
+            ((set-covero es [] [] a b) s)
+            ((lmap-suspend `uniono [a b out] #(uniono a b out) [a b out]) s)))))))
 
 (defn intersectiono
   "A relation where out is (clojure.set/intersection a b)."
@@ -5537,11 +5538,11 @@
   (fn [s]
     (if-let [[pa pb] (let [pa (plain-set s a) pb (plain-set s b)] (when (and pa pb) [pa pb]))]
       ((== out (clojure.set/intersection pa pb)) s)
-    (if-let [es (set-elems s a)]
-      ((set-filtero es #(containso b %) #(lackso b %) [] out) s)
-      (if-let [es (set-elems s b)]
-        ((set-filtero es #(containso a %) #(lackso a %) [] out) s)
-        ((lmap-suspend `intersectiono [a b out] #(intersectiono a b out) [a b out]) s))))))
+      (if-let [[s es] (set-elems s a)]
+        ((set-filtero es #(containso b %) #(lackso b %) [] out) s)
+        (if-let [[s es] (set-elems s b)]
+          ((set-filtero es #(containso a %) #(lackso a %) [] out) s)
+          ((lmap-suspend `intersectiono [a b out] #(intersectiono a b out) [a b out]) s))))))
 
 (defn differenceo
   "A relation where out is (clojure.set/difference a b)."
@@ -5549,16 +5550,16 @@
   (fn [s]
     (if-let [[pa pb] (let [pa (plain-set s a) pb (plain-set s b)] (when (and pa pb) [pa pb]))]
       ((== out (clojure.set/difference pa pb)) s)
-    (if-let [es (set-elems s a)]
-      ((set-filtero es #(lackso b %) #(containso b %) [] out) s)
-      (if-let [bs (set-elems s b)]
+      (if-let [[s es] (set-elems s a)]
+        ((set-filtero es #(lackso b %) #(containso b %) [] out) s)
+        (if-let [[s bs] (set-elems s b)]
         ;; a is out plus the elements of b it has
-        ((fresh [c]
-                (disjointo out b)
-                (set-filtero bs (constantly succeed) (constantly succeed) [] c)
-                (uniono c out a))
-         s)
-        ((lmap-suspend `differenceo [a b out] #(differenceo a b out) [a b out]) s))))))
+          ((fresh [c]
+                  (disjointo out b)
+                  (set-filtero bs (constantly succeed) (constantly succeed) [] c)
+                  (uniono c out a))
+           s)
+          ((lmap-suspend `differenceo [a b out] #(differenceo a b out) [a b out]) s))))))
 
 (defn- set-counto [c n]
   (fn [s]

@@ -3460,14 +3460,14 @@
                (== p {:foo :bar}))
          '([{:foo :bar} {:foo :bar :baz :woz}])))
   (is (= (set (run* [p q]
-               (conjo p [:baz :woz] q)
-               (== q {:foo :bar :baz :woz})))
+                    (conjo p [:baz :woz] q)
+                    (== q {:foo :bar :baz :woz})))
          ;; p had no :baz, or had one that conj overwrote
          #{[{:foo :bar} {:foo :bar :baz :woz}]
            [{:foo :bar :baz '_0} {:foo :bar :baz :woz}]}))
   (is (= (set (run* [p q]
-               (== q {:foo :bar :baz :woz})
-               (conjo p [:baz :woz] q)))
+                    (== q {:foo :bar :baz :woz})
+                    (conjo p [:baz :woz] q)))
          ;; p had no :baz, or had one that conj overwrote
          #{[{:foo :bar} {:foo :bar :baz :woz}]
            [{:foo :bar :baz '_0} {:foo :bar :baz :woz}]}))
@@ -4230,20 +4230,20 @@
   (let [opento (tabled [m] (fresh [r] (lmapo m {:a 1} r)))]
     ;; the second call reuses copies of the first call's answers
     (is (= (run* [r]
-             (fresh [m0 m]
-               (opento m0)
-               (opento m)
-               (lmapo m {:a 1} r)
-               (== r {:a 2})))
+                 (fresh [m0 m]
+                        (opento m0)
+                        (opento m)
+                        (lmapo m {:a 1} r)
+                        (== r {:a 2})))
            '()))))
 
 (deftest test-lmap-copy-term-keeps-rest-constraint
   (is (= (run* [r]
-           (fresh [m c]
-             (lmapo m {:a 1} (lvar 'r0))
-             (copy-term m c)
-             (lmapo c {:a 1} r)
-             (== r {:a 2})))
+               (fresh [m c]
+                      (lmapo m {:a 1} (lvar 'r0))
+                      (copy-term m c)
+                      (lmapo c {:a 1} r)
+                      (== r {:a 2})))
          '())))
 
 ;; -----------------------------------------------------------------------------
@@ -4253,19 +4253,19 @@
 (deftest test-lmap-same-rest-fails
   ;; {:a 1 | r} and {:b 2 | r} would each need r to hold the other's key
   (is (= (run* [r]
-           (fresh [m1 m2]
-             (lmapo m1 {:a 1} r)
-             (lmapo m2 {:b 2} r)
-             (== m1 m2)))
+               (fresh [m1 m2]
+                      (lmapo m1 {:a 1} r)
+                      (lmapo m2 {:b 2} r)
+                      (== m1 m2)))
          '())))
 
 (deftest test-lmap-ground-keys-unify-without-branching
   (is (= (run* [q]
-           (fresh [m1 m2 r1 r2]
-             (lmapo m1 {:a 1} r1)
-             (lmapo m2 {:b 2} r2)
-             (== m1 m2)
-             (== q m1)))
+               (fresh [m1 m2 r1 r2]
+                      (lmapo m1 {:a 1} r1)
+                      (lmapo m2 {:b 2} r2)
+                      (== m1 m2)
+                      (== q m1)))
          [(lm {:a 1 :b 2} '_0)])))
 
 (deftest test-lmap-var-keys-each-pairing-once
@@ -4306,11 +4306,11 @@
 
 (deftest test-ntho-builds-vector
   (is (= (run* [q]
-           (fresh [v]
-             (ntho v 0 :a)
-             (ntho v 2 :c)
-             (counto v 3)
-             (== q v)))
+               (fresh [v]
+                      (ntho v 0 :a)
+                      (ntho v 2 :c)
+                      (counto v 3)
+                      (== q v)))
          '([:a _0 :c]))))
 
 (deftest test-ntho-large
@@ -4329,9 +4329,9 @@
 
 (deftest test-counto-fd
   (is (= (run* [v n]
-           (fd/in n (fd/interval 1 2))
-           (counto v n)
-           (ntho v 0 :a))
+               (fd/in n (fd/interval 1 2))
+               (counto v n)
+               (ntho v 0 :a))
          '([[:a] 1] [[:a _0] 2]))))
 
 (deftest test-counto-open-map
@@ -4355,11 +4355,11 @@
 
 (deftest test-peeko-open
   (is (= (run* [q]
-           (fresh [v]
-             (ntho v 0 :a)
-             (peeko v :z)
-             (counto v 3)
-             (== q v)))
+               (fresh [v]
+                      (ntho v 0 :a)
+                      (peeko v :z)
+                      (counto v 3)
+                      (== q v)))
          '([:a _0 :z]))))
 
 ;; -----------------------------------------------------------------------------
@@ -4377,25 +4377,25 @@
 (deftest test-concato-overlap
   ;; x, then [3 4], is [1 2], then y
   (is (= (run* [x y]
-           (fresh [a]
-             (concato x [3 4] a)
-             (concato [1 2] y a)))
+               (fresh [a]
+                      (concato x [3 4] a)
+                      (concato [1 2] y a)))
          [[(lv [1 2] '_0 []) (lv [] '_0 [3 4])]]))
   (is (= (run* [x y]
-           (fresh [a]
-             (counto x 1)
-             (concato x [3 4] a)
-             (concato [1 2] y a)))
+               (fresh [a]
+                      (counto x 1)
+                      (concato x [3 4] a)
+                      (concato [1 2] y a)))
          '())))
 
 (deftest test-concato-lengths-fail-early
   ;; |a| = |x| + 1 = |b| and |a| = |b| + 1
   (is (= (run* [q]
-           (fresh [x a b]
-             (concato x [1] a)
-             (concato [1] x b)
-             (concato b [2] a)
-             (== q 1)))
+               (fresh [x a b]
+                      (concato x [1] a)
+                      (concato [1] x b)
+                      (concato b [2] a)
+                      (== q 1)))
          '())))
 
 (deftest test-subveco
@@ -4419,10 +4419,10 @@
 
 (deftest test-geto-nested
   (is (= (run* [x]
-           (fresh [u e]
-             (geto {:users [{:name "a"} {:name "b"}]} :users u)
-             (geto u 1 e)
-             (geto e :name x)))
+               (fresh [u e]
+                      (geto {:users [{:name "a"} {:name "b"}]} :users u)
+                      (geto u 1 e)
+                      (geto e :name x)))
          '("b"))))
 
 (deftest test-assoco-vector
@@ -4437,27 +4437,27 @@
 (deftest test-lvec-unify-list
   (is (= (run* [q] (fresh [x] (== (lcons 1 x) [1 2 3]) (== q x))) '((2 3))))
   (is (= (run* [q]
-           (fresh [v t]
-             (conjo v 9 q)
-             (== v (lcons 1 t))
-             (counto q 3)))
+               (fresh [v t]
+                      (conjo v 9 q)
+                      (== v (lcons 1 t))
+                      (counto q 3)))
          '((9 1 _0)))))
 
 (deftest test-lvec-disequality
   (is (= (run* [q]
-           (fresh [v]
-             (ntho v 0 1)
-             (!= v [1 2])
-             (counto v 2)
-             (== q v)))
+               (fresh [v]
+                      (ntho v 0 1)
+                      (!= v [1 2])
+                      (counto v 2)
+                      (== q v)))
          '(([1 _0] :- (!= (_0 2))))))
   (is (= (run* [q]
-           (fresh [v]
-             (ntho v 0 1)
-             (!= v [1 2])
-             (counto v 2)
-             (ntho v 1 2)
-             (== q v)))
+               (fresh [v]
+                      (ntho v 0 1)
+                      (!= v [1 2])
+                      (counto v 2)
+                      (ntho v 1 2)
+                      (== q v)))
          '())))
 
 (deftest test-lvec-tabled
@@ -4467,11 +4467,11 @@
 
 (deftest test-lvec-copy-term
   (is (= (run* [q]
-           (fresh [v c]
-             (ntho v 1 :a)
-             (copy-term v c)
-             (counto c 2)
-             (== q c)))
+               (fresh [v c]
+                      (ntho v 1 :a)
+                      (copy-term v c)
+                      (counto c 2)
+                      (== q c)))
          '([_0 :a]))))
 
 ;; -----------------------------------------------------------------------------
@@ -4512,9 +4512,9 @@
   (conde
    [(== l ()) (== s out)]
    [(fresh [a d res]
-      (conso a d l)
-      (conso a res out)
-      (appendo-rel d s res))]))
+           (conso a d l)
+           (conso a res out)
+           (appendo-rel d s res))]))
 
 (deftest test-defrel
   (is (= (run* [x y] (appendo-rel x y [1 2]))
@@ -4535,18 +4535,18 @@
   ;; conflicting types fail while still unbound
   (is (= (run* [q] (symbolo q) (numbero q)) '()))
   (is (= (run* [q]
-           (fresh [x y]
-             (symbolo x)
-             (numbero y)
-             (== x y)
-             (== q 1)))
+               (fresh [x y]
+                      (symbolo x)
+                      (numbero y)
+                      (== x y)
+                      (== q 1)))
          '()))
   (is (= (run* [q]
-           (fresh [x y]
-             (symbolo x)
-             (symbolo y)
-             (== x y)
-             (== q [x y])))
+               (fresh [x y]
+                      (symbolo x)
+                      (symbolo y)
+                      (== x y)
+                      (== q [x y])))
          `(([~'_0 ~'_0] :- (symbolo ~'_0))))))
 
 (deftest test-absento
@@ -4567,52 +4567,51 @@
   (conde
    [(== () env)]
    [(fresh [y v rest]
-      (== (lcons (lcons y v) rest) env)
-      (!= y x)
-      (not-in-envo x rest))]))
+           (== (lcons (lcons y v) rest) env)
+           (!= y x)
+           (not-in-envo x rest))]))
 
 (defrel lookupo [x env t]
   (fresh [rest y v]
-    (== (lcons (lcons y v) rest) env)
-    (conde
-     [(== y x) (== v t)]
-     [(!= y x) (lookupo x rest t)])))
+         (== (lcons (lcons y v) rest) env)
+         (conde
+          [(== y x) (== v t)]
+          [(!= y x) (lookupo x rest t)])))
 
 (defrel proper-listo [exp env val]
   (conde
    [(== () exp) (== () val)]
    [(fresh [a d t-a t-d]
-      (== (lcons a d) exp)
-      (== (lcons t-a t-d) val)
-      (eval-expo a env t-a)
-      (proper-listo d env t-d))]))
+           (== (lcons a d) exp)
+           (== (lcons t-a t-d) val)
+           (eval-expo a env t-a)
+           (proper-listo d env t-d))]))
 
 (defrel eval-expo [expr env val]
   (conde
    [(fresh [v]
-      (== (list 'quote v) expr)
-      (not-in-envo 'quote env)
-      (absento 'closure v)
-      (== v val))]
+           (== (list 'quote v) expr)
+           (not-in-envo 'quote env)
+           (absento 'closure v)
+           (== v val))]
    [(fresh [a*]
-      (== (lcons 'list a*) expr)
-      (not-in-envo 'list env)
-      (absento 'closure a*)
-      (proper-listo a* env val))]
+           (== (lcons 'list a*) expr)
+           (not-in-envo 'list env)
+           (absento 'closure a*)
+           (proper-listo a* env val))]
    [(symbolo expr) (lookupo expr env val)]
    [(fresh [rator rand x body env2 a]
-      (== (list rator rand) expr)
-      (eval-expo rator env (list 'closure x body env2))
-      (eval-expo rand env a)
-      (eval-expo body (lcons (lcons x a) env2) val))]
+           (== (list rator rand) expr)
+           (eval-expo rator env (list 'closure x body env2))
+           (eval-expo rand env a)
+           (eval-expo body (lcons (lcons x a) env2) val))]
    [(fresh [x body]
-      (== (list 'lambda (list x) body) expr)
-      (symbolo x)
-      (not-in-envo 'lambda env)
-      (== (list 'closure x body env) val))]))
+           (== (list 'lambda (list x) body) expr)
+           (symbolo x)
+           (not-in-envo 'lambda env)
+           (== (list 'closure x body env) val))]))
 
 (defn- evalo [expr val] (eval-expo expr () val))
-
 
 (deftest test-relational-interpreter
   (is (= (run* [v] (evalo '((lambda (x) x) (quote 5)) v)) '(5)))
@@ -4683,6 +4682,15 @@
   (is (= (run* [q] (subseto #{1 2} q)) [(ls #{1 2} '_0)]))
   (is (= (run* [q] (disjointo #{1} q) (containso q 1)) '())))
 
+(deftest test-set-algebra-literal-distinct
+  ;; a set literal's elements stay distinct when a relation takes it apart
+  (is (= (run* [x] (uniono #{:cat x} #{} #{:cat})) '()))
+  (is (= (run* [x] (subseto #{:cat x} #{:cat})) '()))
+  (is (= (run* [x] (intersectiono #{:cat x} #{:cat} #{:cat}) (== x :cat)) '()))
+  ;; the union from the upstream wiki's CLP(Set) page
+  (is (= (set (run* [x y z] (uniono #{:cat x y} #{:dog :bird z} #{:cat :dog :bird})))
+         #{[:dog :bird :cat] [:bird :dog :cat]})))
+
 (deftest test-set-counto
   (is (= (run* [n] (counto #{1 2} n)) '(2)))
   (is (= (run* [s] (containso s 1) (counto s 1)) '(#{1}))))
@@ -4711,7 +4719,7 @@
   (is (= (run* [q] (fd/residual) (fd/in q (fd/interval 1 3)))
          `((~'_0 :- (fd/in ~'_0 (fd/interval 1 3))))))
   (is (= (run* [q] (fd/residual)
-           (fresh [x] (fd/in x (fd/interval 1 1000000)) (== q [x])))
+               (fresh [x] (fd/in x (fd/interval 1 1000000)) (== q [x])))
          `(([~'_0] :- (fd/in ~'_0 (fd/interval 1 1000000))))))
   (is (= (run* [q] (fd/residual) (fd/in q (fd/domain 1 5 9)))
          `((~'_0 :- (fd/in ~'_0 (fd/domain 1 5 9)))))))
@@ -4725,34 +4733,34 @@
                           (fd/in ~'_1 (fd/interval 1 3))}]]))
   (is (= (map residual-set
               (run* [x y] (fd/residual) (fd/in x y (fd/interval 1 3)) (fd/<= x y)
-                (fd/!= y 3)))
+                    (fd/!= y 3)))
          `[[[~'_0 ~'_1] #{(fd/<= ~'_0 ~'_1)
                           (fd/in ~'_0 (fd/interval 1 2))
                           (fd/in ~'_1 (fd/interval 1 2))}]]))
   ;; y isn't in the answer, but x depends on it
   (is (= (map residual-set
               (run* [x] (fd/residual)
-                (fresh [y] (fd/in x y (fd/interval 0 9)) (fd/+ x y 10))))
+                    (fresh [y] (fd/in x y (fd/interval 0 9)) (fd/+ x y 10))))
          `[[~'_0 #{(fd/+ ~'_0 ~'_1 10)
                    (fd/in ~'_0 (fd/interval 1 9))
                    (fd/in ~'_1 (fd/interval 1 9))}]]))
   ;; z is unrelated to the answer
   (is (= (run* [x] (fd/residual)
-           (fresh [z] (fd/in x (fd/interval 1 2)) (fd/in z (fd/interval 1 9))))
+               (fresh [z] (fd/in x (fd/interval 1 2)) (fd/in z (fd/interval 1 9))))
          `((~'_0 :- (fd/in ~'_0 (fd/interval 1 2)))))))
 
 (deftest test-fd-residual-needs-solution
   ;; every domain stays {1 2}, but three distinct values don't fit
   (is (= (run* [x] (fd/residual)
-           (fresh [y z] (fd/in x y z (fd/domain 1 2)) (fd/distinct [x y z])))
+               (fresh [y z] (fd/in x y z (fd/domain 1 2)) (fd/distinct [x y z])))
          '()))
   (is (= (count (run* [x] (fd/residual)
-                  (fresh [y z] (fd/in x y z (fd/domain 1 2 3)) (fd/distinct [x y z]))))
+                      (fresh [y z] (fd/in x y z (fd/domain 1 2 3)) (fd/distinct [x y z]))))
          1)))
 
 (deftest test-fd-residual-ground
   (is (= (run* [x] (fd/residual) (fd/in x (fd/interval 0 10))
-           (conde [(fd/< x 3)] [(== x 7)]))
+               (conde [(fd/< x 3)] [(== x 7)]))
          `((~'_0 :- (fd/in ~'_0 (fd/interval 0 2))) 7)))
   ;; labeling stays the default
   (is (= (run* [q] (fd/in q (fd/interval 1 3))) '(1 2 3))))
@@ -4784,20 +4792,20 @@
 (deftest test-disequality-wakes-on-nested-lcons
   ;; the vars of ((3 . e) f . 4) used to go unwatched
   (is (= (run* [q] (fresh [e f]
-                     (!= q (lcons (lcons 3 e) (lcons f 4)))
-                     (== e 1) (== f 2)
-                     (== q (lcons (lcons 3 1) (lcons 2 4)))))
+                          (!= q (lcons (lcons 3 e) (lcons f 4)))
+                          (== e 1) (== f 2)
+                          (== q (lcons (lcons 3 1) (lcons 2 4)))))
          '())))
 
 (deftest test-absento-non-ground
   (is (= (run* [q] (absento q q)) '()))
   (is (= (run* [q] (fresh [a]
-                     (== (lcons a 3) q)
-                     (absento q (lcons a (lcons 4 (lcons a 3))))))
+                          (== (lcons a 3) q)
+                          (absento q (lcons a (lcons 4 (lcons a 3))))))
          '()))
   (is (= (map pr-str (run* [q] (fresh [a b]
-                                 (absento (lcons a b) q)
-                                 (== q (lcons 3 (lcons b b))))))
+                                      (absento (lcons a b) q)
+                                      (== q (lcons 3 (lcons b b))))))
          ["(3 _0 . _0)"])))
 
 (deftest test-residual-simplification
