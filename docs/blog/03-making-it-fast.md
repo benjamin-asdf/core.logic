@@ -86,9 +86,9 @@ refers to `r1` still sees the same map.
 
 ## What upstream code pays
 
-Nothing measurable. Programs that never use maps don't reach any of this
-code, and the upstream benchmarks run within noise. The occurs-check
-piggyback from [part 2](02-no-unsupported-behaviour.md) adds one counter
-read per binding.
+Little. Programs that never use maps don't reach the relations' code, and
+most upstream benchmarks run within noise; queries with many answers pay per
+answer ([part 2](02-no-unsupported-behaviour.md)). The occurs-check piggyback
+adds two counter reads per binding when the occurs check is on.
 
 Next: [Vectors](04-vectors.md).
