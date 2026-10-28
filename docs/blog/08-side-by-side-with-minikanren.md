@@ -1,6 +1,6 @@
 # Side by side with miniKanren
 
-*My core.logic fork, part 8 of 8.* [Index](README.md) · [← Sets](07-sets.md)
+*My core.logic fork, part 8 of 9.* [Index](README.md) · [← Sets](07-sets.md) · [A relational Clojure interpreter →](09-a-relational-clojure-interpreter.md)
 
 faster-miniKanren is the most widely used miniKanren: it runs the
 relational interpreters behind the quine and program-synthesis work

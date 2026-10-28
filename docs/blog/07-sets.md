@@ -1,6 +1,6 @@
 # Sets
 
-*My core.logic fork, part 7 of 8.* [Index](README.md) · [← Towards relational hyperdimensional computing](06-relational-hdc.md) · [Side by side with miniKanren →](08-side-by-side-with-minikanren.md)
+*My core.logic fork, part 7 of 9.* [Index](README.md) · [← Towards relational hyperdimensional computing](06-relational-hdc.md) · [Side by side with miniKanren →](08-side-by-side-with-minikanren.md)
 
 Upstream core.logic doesn't know sets. A set is just a value to it: a logic
 variable inside `#{x}` is never bound, never reified, and `#{x}` unifies

@@ -1,6 +1,6 @@
 # Making it fast
 
-*My core.logic fork, part 3 of 8.* [Index](README.md) · [← No unsupported behaviour](02-no-unsupported-behaviour.md) · [Vectors →](04-vectors.md)
+*My core.logic fork, part 3 of 9.* [Index](README.md) · [← No unsupported behaviour](02-no-unsupported-behaviour.md) · [Vectors →](04-vectors.md)
 
 Once the relations were correct in every mode, I benchmarked each of them at
 map sizes 10, 100 and 1000. Some were fine. Some were not:

@@ -1,6 +1,6 @@
 # Where this sits: the literature, and parity with miniKanren
 
-*My core.logic fork, part 5 of 8.* [Index](README.md) · [← Vectors](04-vectors.md) · [Towards relational hyperdimensional computing →](06-relational-hdc.md)
+*My core.logic fork, part 5 of 9.* [Index](README.md) · [← Vectors](04-vectors.md) · [Towards relational hyperdimensional computing →](06-relational-hdc.md)
 
 Relational maps are new to miniKanren, but not to logic programming. Records
 with features, rows with lacks constraints, sets with rests and words with

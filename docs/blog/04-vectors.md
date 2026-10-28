@@ -1,6 +1,6 @@
 # Vectors
 
-*My core.logic fork, part 4 of 8.* [Index](README.md) · [← Making it fast](03-making-it-fast.md) · [Where this sits: the literature, and parity with miniKanren →](05-literature-and-parity.md)
+*My core.logic fork, part 4 of 9.* [Index](README.md) · [← Making it fast](03-making-it-fast.md) · [Where this sits: the literature, and parity with miniKanren →](05-literature-and-parity.md)
 
 After maps, vectors. Same rule as for maps: every relation correct in every
 mode, or waiting visibly.

@@ -1,6 +1,6 @@
 # Towards relational hyperdimensional computing
 
-*My core.logic fork, part 6 of 8.* [Index](README.md) · [← Where this sits: the literature, and parity with miniKanren](05-literature-and-parity.md) · [Sets →](07-sets.md)
+*My core.logic fork, part 6 of 9.* [Index](README.md) · [← Where this sits: the literature, and parity with miniKanren](05-literature-and-parity.md) · [Sets →](07-sets.md)
 
 > This is a design sketch, not an implementation.
 

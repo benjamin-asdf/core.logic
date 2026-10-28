@@ -1,6 +1,6 @@
 # core.logic — relational data fork
 
-Benjamin's fork making Clojure maps, vectors and sets relational. What exists: README.md; blog series "My core.logic fork": docs/blog/ (index README.md; 01 maps … 08 side by side with miniKanren); parked work: docs/future-work.md.
+Benjamin's fork making Clojure maps, vectors and sets relational. What exists: README.md; blog series "My core.logic fork": docs/blog/ (index README.md; 01 maps … 09 relational Clojure interpreter); parked work: docs/future-work.md.
 
 ## Hard rule
 
@@ -10,7 +10,7 @@ No unsupported behaviour: every relation is correct in every mode (answers, fail
 
 - Maps: goal-based API, all key permutations; plain maps are relational, distinct keys checked lazily, piggybacking on the occurs check. JVM first, cljs later.
 - Vectors (`LVec`): front + unknown middle + back. Lengths reasoned exactly by the fork's own linear solver (constant + sum of middle lengths, elimination, all ≥ 0) before enumeration. core.logic FD was rejected (stack overflow on unbounded lengths); FD vars interoperate by waiting for labeling. Vectors live in the core ns, keep unifying with lists (Clojure `=`). `geto`/`assoco` are shared between maps and vectors and wait while the type is unknown.
-- Done: `get-ino`/`assoc-ino`, `defrel`, type constraints, `absento` (faster-miniKanren's quine interpreter ported as a test), sets — open sets hold known elements only; `geto` deliberately not on sets.
+- Done: `get-ino`/`assoc-ino`, `defrel`, type constraints, `absento` (faster-miniKanren's quine interpreter ported as a test), sets — open sets hold known elements only; `geto` deliberately not on sets. `clojure.core.logic.evalo`: relational interpreter for a Clojure subset, env a relational map; list/vector/map/set kinds are type constraints (typeo) so code tells lists from vectors.
 - FD answers: opt-in `(fd/residual)` shows domains and FD constraints instead of labeling, only if a solution exists; labeling stays the default.
 - Parity: faster-miniKanren's test suite is generated into src/test (script/fmk_tests.py, needs a faster-miniKanren checkout); 352/355 agree, 3 skips documented in the script.
 - Public fork: remote `fork` = github.com/benjamin-asdf/core.logic (master pushed there); `origin` is upstream clojure/core.logic, never push to it.

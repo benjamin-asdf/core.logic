@@ -137,6 +137,18 @@ answer is only given if a solution exists. Labeling stays the default.
 ;;   (printed with fully qualified names)
 ```
 
+**A relational Clojure interpreter.** `clojure.core.logic.evalo` evaluates
+a Clojure subset (`fn`, `let`, `if`, `quote`, vector, map and set literals,
+keywords and maps as fns, `get`, `assoc`, `conj`) with a relational map as
+the environment, and runs backwards: which input gives this output, which
+program gives this value. Search for programs is still slow beyond small
+ones; see [post 9](docs/blog/09-a-relational-clojure-interpreter.md).
+
+```clojure
+(run* [m] (eval-expo '(assoc m :b 2) (env-with {'m m}) {:a 1 :b 2}))
+;;=> ({:a 1} {:a 1, :b _0})
+```
+
 **Later:** records as data-level types (schema inference run backwards), and
 the ClojureScript port. See [future work](docs/future-work.md).
 
@@ -161,6 +173,9 @@ The series *My core.logic fork* ([index](docs/blog/README.md)):
 8. [Side by side with miniKanren](docs/blog/08-side-by-side-with-minikanren.md):
    faster-miniKanren's test suite run on core.logic, the bugs it found, and
    maps, sets and vectors next to their miniKanren encodings.
+9. [A relational Clojure interpreter](docs/blog/09-a-relational-clojure-interpreter.md):
+   `evalo` for a Clojure subset, with relational maps as environments; what
+   it runs backwards, and where its search is still slow.
 
 Using it
 ----

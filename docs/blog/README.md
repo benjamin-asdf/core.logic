@@ -75,6 +75,9 @@ answers correctly in every mode, or waits until it can
 8. [Side by side with miniKanren](08-side-by-side-with-minikanren.md):
    faster-miniKanren's test suite run on core.logic, the bugs it found, and
    maps, sets and vectors next to their miniKanren encodings.
+9. [A relational Clojure interpreter](09-a-relational-clojure-interpreter.md):
+   `evalo` for a Clojure subset, with relational maps as environments; what
+   it runs backwards, and where its search is still slow.
 
 Next, maybe: records as types, and ClojureScript. See
 [future work](../future-work.md).
