@@ -4878,6 +4878,13 @@
     (is (= (run* [i] (fresh [v] (vectoro* v) (absento 1 v) (geto v i 1))) []))
     (is (= (run* [i] (fresh [v] (vectoro* v) (geto v i 1) (absento 1 v))) []))
     (is (= (run* [i] (fresh [v] (vectoro* v) (geto v i [1]) (absento 1 v))) [])))
+  (testing "a position has one element, also while it is unknown"
+    (is (= (run* [i] (fresh [v] (vectoro* v) (geto v i 1) (geto v i 2))) []))
+    (is (= (run* [i] (fresh [v a] (vectoro* v) (conjo a 0 v) (geto v i 1) (geto v i 2))) []))
+    (is (= (run* [i] (fresh [v j] (vectoro* v) (geto v i 1) (geto v j 2) (== i j))) []))
+    (is (= (run* [i] (fresh [v w] (vectoro* v) (vectoro* w) (geto v i 1) (geto w i 2) (== v w))) []))
+    (is (= (map pr-str (run 2 [i v x] (vectoro* v) (geto v i 1) (geto v i x)))
+           ["[0 (lvec [1] | _0 | []) 1]" "[1 (lvec [_0 1] | _1 | []) 1]"])))
   (testing "answers that hold are kept"
     (is (= (map pr-str (run 2 [i v] (vectoro* v) (absento 2 v) (geto v i 1)))
            ["([0 (lvec [1] | _0 | [])] :- (clojure.core.logic/absento 2 _0))"

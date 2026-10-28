@@ -3692,9 +3692,10 @@
           IRunnable
           (-runnable? [_]
             (boolean
-             (if (:pick info)
+             (if (or (:pick info) (:split info))
                ;; also when a watched var is bound to another var, which
-               ;; may be the map of another waiting pick of the same key
+               ;; may be the map of another waiting pick of the same key,
+               ;; or the index of another waiting split of the same sequence
                (some #(let [w (walk s %)] (or (not (lvar? w)) (not= w %))) watch)
                (some #(not (lvar? (walk s %))) watch))))))
       IConstraintOp
@@ -3758,6 +3759,25 @@
 
 (declare absento)
 
+(defn- lmap-pend-pick
+  "lmap-pend for a relation that puts entries or elements into a collection
+   while it waits (info has :pick, or :split and maybe :elem). The
+   constraint's id is kept in the meta of s under ::picks, so that absento
+   and other waiting picks look at these constraints only, not at the whole
+   store."
+  [s rel args retry watch-terms ambiguous? info]
+  (let [id (:cid (:cs s))]
+    (when-let [s (lmap-pend s rel args retry watch-terms ambiguous? info)]
+      (if (contains? (:cm (:cs s)) id)
+        (vary-meta s update ::picks (fnil conj #{}) id)
+        s))))
+
+(defn- waiting-picks
+  "The info of the pending constraints lmap-pend-pick added to s."
+  [s]
+  (let [cm (:cm (:cs s))]
+    (keep #(some-> (get cm %) meta ::lmap-rel) (::picks (meta s)))))
+
 (defn- lmap-pick-wait
   "Waits on the relation rel on args, which says t holds key k with value
    x, until a var in watch-terms is bound. A key has one value, so other
@@ -3778,9 +3798,8 @@
     ((all (everyg #(== x %) same)
           (everyg #(all (absento % k) (absento % x)) absent)
           (fn [s]
-            ;; tells absento there is a waiting pick to look at
-            (lmap-pend (vary-meta s assoc ::picks true)
-                       rel args retry watch-terms false {:pick [t k x]})))
+            ;; absento looks at waiting picks
+            (lmap-pend-pick s rel args retry watch-terms false {:pick [t k x]})))
      s)))
 
 (defn- lmap-picko
@@ -4898,20 +4917,29 @@
         (lvar? i')
         (let [[f m b] (seq-parts s v)
               ;; v is nothing but its unknown middle, so x is in it
-              m (when (and m (empty? f) (empty? b)) m)]
+              m (when (and m (empty? f) (empty? b)) m)
+              v* (walk s v)
+              ;; a position has one element, so other waiting splits at
+              ;; the same position of the same sequence give the same one
+              same (for [info (waiting-picks s)
+                         :let [[v2 i2 x2] (:split info)]
+                         :when (and v2 (= i' (walk s i2)) (= v* (walk s v2)))]
+                     x2)]
           ((all
+            (everyg #(== x %) same)
             (if m (seq-elem-checks m x) succeed)
             (fn [s]
-              ;; :elem tells absento there is a waiting element to look at
-              (lmap-pend (if m (vary-meta s assoc ::picks true) s)
-                         rel args #(seq-splito v i pre x post rel args) [v i] true
-                         {:elem (when m [m x])
+              (let [info {:split [v i x]
                           :force #(fn [a]
                                     (if (get-dom-fd a i)
                                       ((all (force-ans i)
                                             (seq-splito v i pre x post rel args))
                                        a)
-                                      ((seq-split-enum v i pre x post rel args) a)))})))
+                                      ((seq-split-enum v i pre x post rel args) a)))}
+                    retry #(seq-splito v i pre x post rel args)]
+                ;; absento looks at waiting elements, as at waiting picks
+                (lmap-pend-pick s rel args retry [v i] true
+                                (if m (assoc info :elem [m x]) info)))))
            s))
         :else nil))))
 
@@ -5813,15 +5841,13 @@
             ;; the keys and values waiting relations put into x, and the
             ;; elements they put into x as a sequence
             (everyg #(absento t %)
-                    (when (::picks (meta s))
-                      (for [c (vals (:cm (:cs s)))
-                            :let [info (::lmap-rel (meta c))
-                                  [m2 k2 v2] (:pick info)
-                                  [m3 x3] (:elem info)]
-                            y (cond
-                                (and m2 (= x' (walk s m2))) [k2 v2]
-                                (and m3 (= x' (walk s m3))) [x3])]
-                        y)))
+                    (for [info (waiting-picks s)
+                          :let [[m2 k2 v2] (:pick info)
+                                [m3 x3] (:elem info)]
+                          y (cond
+                              (and m2 (= x' (walk s m2))) [k2 v2]
+                              (and m3 (= x' (walk s m3))) [x3])]
+                      y))
             (fn [s]
               (lmap-pend s `absento [t x] #(absento t x) [x] false
                          {:absent [t x]})))
