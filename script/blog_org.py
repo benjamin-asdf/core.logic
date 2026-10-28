@@ -76,9 +76,14 @@ def fix_verbatim(org, codes):
     def html_code(m):
         c = m.group(1).replace('&', '&amp;').replace('<', '&lt;').replace('|', '&#124;')
         return f'@@html:<code>{c}</code>@@'
-    return re.sub(r'^\|.*$',
-                  lambda row: re.sub(r'=([^=\n]*\|[^=\n]*)=', html_code, row.group(0)),
-                  org, flags=re.M)
+    piped = [c.replace('\\|', '|') for c in codes if '\\|' in c]
+
+    def fix_row(row):
+        row = row.group(0)
+        for c in piped:
+            row = row.replace(f'={c}=', html_code(re.match(r'(.*)', c)))
+        return row
+    return re.sub(r'^\|.*$', fix_row, org, flags=re.M)
 
 
 def main(out_dir):
