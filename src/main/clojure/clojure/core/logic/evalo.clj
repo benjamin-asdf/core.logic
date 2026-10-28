@@ -92,6 +92,9 @@
   ;; ev and vv are vectors of the same length, each element of vv the
   ;; value of the element of ev at the same index
   [ev env vv]
+  ;; typed, so that conjo builds them at once instead of waiting
+  (vector-formo ev)
+  (vector-formo vv)
   (conde
    [(== [] ev) (== [] vv)]
    [(fresh [e es v vs]
@@ -180,6 +183,7 @@
 (defrel ^:private symbol-veco
   ;; v is a vector of symbols, none of them &
   [v]
+  (vector-formo v)
   (conde
    [(== [] v)]
    [(fresh [v0 p]
@@ -202,9 +206,11 @@
 (defrel ^:private let-bindo
   ;; out is env extended by the let bindings bv, one after the other
   [bv env out]
+  (vector-formo bv)
   (conde
    [(== [] bv) (== env out)]
    [(fresh [bv0 bv1 x e v env0]
+           (vector-formo bv1)
            (conjo bv1 e bv)
            (conjo bv0 x bv1)
            (let-bindo bv0 env env0)

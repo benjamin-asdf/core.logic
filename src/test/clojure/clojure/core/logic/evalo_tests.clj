@@ -131,3 +131,14 @@
                  (evalo q q))
         quine (clojure.walk/postwalk-replace {'_0 'x} (first q))]
     (is (= (run* [v] (evalo quine v)) [quine]))))
+
+(deftest test-evalo-quine-search-fn-shape
+  ;; only the outer shape ((fn [x] body) 'b) given: a few seconds, since
+  ;; vectors in the search are built at once and an element can't hold the
+  ;; vector it is in
+  (let [[q] (run 1 [q]
+                 (fresh [x body b]
+                        (== q (list (list 'fn [x] body) (list 'quote b))))
+                 (evalo q q))
+        quine (clojure.walk/postwalk-replace {'_0 'x} (first q))]
+    (is (= (run* [v] (evalo quine v)) [quine]))))
