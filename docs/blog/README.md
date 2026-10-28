@@ -12,7 +12,8 @@ Scheme pair, because Scheme's data is the pair: `appendo` and `membero` work
 so well because a partly known list has a natural shape, a known front and an
 unbound tail. core.logic brought miniKanren to Clojure, and the pair came
 along. Clojure's own data came in second class: two maps unified only if they
-had exactly the same keys, and nothing could take a map apart or build one.
+had exactly the same keys, and apart from `featurec` reading values at known
+keys, nothing could take a map apart or build one.
 
 But the data is what Clojure is. Literal, immutable maps, vectors and sets,
 used for everything: "just use maps", data over functions over macros, a
@@ -49,8 +50,10 @@ with unknown elements, `(unionc #{:cat x y} #{:dog :bird z} o)`, and notes
 that such a union branches over which elements pair up. The fork runs that one
 too: with `o` = `#{:cat :dog :bird}`, `x` and `y` are `:dog` and `:bird` in
 either order and `z` is `:cat`. (Writing this found a bug: the fork used to
-let `x` be `:cat` too. Fixed.) Both pages list the work as future work; this
-series is that work.
+let `x` be `:cat` too. Fixed.) Both pages are still on the wiki's roadmap,
+under "Immediate", and were never built. The machinery they sketch is not what
+this series builds (a `defc` with mode declarations, set domains like the FD
+domains), but their test cases are what it answers.
 
 It also sets the bar. A relation that only works in some directions is a
 function with extra steps, so the series holds every relation to one rule: it

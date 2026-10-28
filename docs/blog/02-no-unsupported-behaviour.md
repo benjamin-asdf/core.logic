@@ -91,11 +91,13 @@ it passes, by bumping a counter, which costs nearly nothing on the common
 path. After binding, if the counter moved, those maps get their keys checked,
 and a constraint keeps them distinct from then on.
 
-In `run-nc` (no occurs check) the walk doesn't happen. There, collisions are
-caught when the answer is reified: walking the map back into a Clojure map
-would merge equal keys, so the reified map comes out smaller than the term,
-and that answer is dropped. The trade-off is that `run-nc` only checks the
-maps that appear in an answer. That's in keeping with what `run-nc` already
+In `run-nc` (no occurs check) the walk doesn't happen. There, keys are
+checked for maps that are unified with another map or passed to a relation,
+and collisions in the answer are caught when it is reified: walking the map
+back into a Clojure map would merge equal keys, so the reified map comes out
+smaller than the term, and that answer is dropped. The trade-off is that a
+map `run-nc` only binds, and never unifies, hands to a relation or returns, is
+not checked. That's in keeping with what `run-nc` already
 is: an opt-out of checks for speed, trusted to be used on terms where it's
 safe.
 

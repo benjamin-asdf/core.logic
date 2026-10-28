@@ -15,8 +15,10 @@ vector a vector:
   `(1 2 . _0)`. Nothing can be known about the *end* of a sequence whose
   length is unknown.
 - Answers built from partial lists come back as lists, not vectors.
-- No relations for positions (`nth`), length (`count`), the end (`conj`,
-  `peek`, `pop`), slices (`subvec`) or concatenation that know about vectors.
+- No relations for positions (`nth`), length (`count`), the end (`peek`,
+  `pop`), slices (`subvec`) or concatenation that know about vectors.
+  Upstream's `conjo` is a constraint that waits until two of its arguments
+  are ground.
 
 ## The term: front, middle, back
 
@@ -58,8 +60,9 @@ Unifying `[f1 | m1 | b1]` with `[f2 | m2 | b2]`:
 3. If one side has nothing left over, its middle *is* the other side: a
    single binding.
 4. Otherwise it's `m1 ++ B = F ++ m2`: the two middles overlap in an unknown
-   way. There are `|F| + 1` cases: `m1` covers all of `F` (one general answer
-   with a fresh middle), or ends inside `F` at one of `|F|` places.
+   way. There are at most `|F| + 1` cases: `m1` covers all of `F` (one
+   general answer with a fresh middle), or ends inside `F` at a place where
+   the rest of `F` fits into `B`.
 
 With two different middles, case 4 is finite, so it uses the same
 mechanism as map unification with unknown keys: try it, commit if exactly one
@@ -180,7 +183,7 @@ That stays. Answers built by the vector relations come back as vectors.
   and lists, and `count` of an unknown map has no finite answer. So `conjo`,
   `peeko`, `popo` and `counto` on a collection whose kind is still unknown
   wait, and appear in the answer as constraints, e.g.
-  `(_0 :- (counto _0 3))`.
+  `(_0 :- (clojure.core.logic/counto _0 3))`.
 - **Infinite answers.** `ntho` with an unknown index, or `counto` with an
   unknown length, on an open vector has infinitely many answers. Use `run n`.
   Positions are enumerated fairly: answer k covers position k in the middle

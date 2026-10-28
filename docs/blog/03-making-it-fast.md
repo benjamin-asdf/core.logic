@@ -8,8 +8,8 @@ map sizes 10, 100 and 1000. Some were fine. Some were not:
 | Operation, n = 1000 | Before | After |
 |---|---|---|
 | n × `geto` building an unknown map | 33 s | 8.2 ms |
-| `keyso` / `valso` with a given key list | hung at n = 10 | 0.5 ms |
-| `mergeo m m` | 465 ms | 0.36 ms |
+| `keyso` / `valso` with a given key list | factorial: did not finish at n = 10 | 0.4 ms |
+| `mergeo m m` | 465 ms | 0.5 ms |
 | `==` with an unknown key into a large map | 97 ms | 1.5 ms |
 | `geto` enumerating all keys | 49 ms | 2.3 ms |
 | `geto` with a known key | 0.26 ms | 0.013 ms, constant in n |
@@ -36,7 +36,8 @@ store stays linear.
 
 `keyso` says "these are the keys, in any order", and the obvious relational
 definition is `permuteo`. With the key list given, `permuteo` searches orderings:
-factorial in the length, and hung already at ten keys.
+factorial in the length: bare `permuteo` takes seconds at ten keys, and the old
+`keyso` built on it didn't finish.
 
 When everything is known, the question is just "same multiset?", one
 frequency count. When some elements are unknown, removing them one at a time

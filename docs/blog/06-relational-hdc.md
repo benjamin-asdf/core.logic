@@ -2,17 +2,17 @@
 
 *My core.logic fork, part 6 of 8.* [Index](README.md) · [← Where this sits: the literature, and parity with miniKanren](05-literature-and-parity.md) · [Sets →](07-sets.md)
 
-> Draft. This is a design sketch, not an implementation.
+> This is a design sketch, not an implementation.
 
-The data structures this fork makes relational are maps, sequences and,
-later, sets. They're also exactly the structures that hyperdimensional
+The data structures this fork makes relational are maps, sequences and
+sets. They're also exactly the structures that hyperdimensional
 computing (HDC, or vector symbolic architectures) knows how to encode:
 
 | Structure | Logic term in this fork | Hypervector encoding |
 |---|---|---|
-| set | (planned) | bundle: `a + b + c` |
+| set | `(lset #{a b} \| r)` | bundle: `a + b + c` |
 | map / record | `(lmap {k v ...} \| r)` | bundle of bindings: `k1⊗v1 + k2⊗v2 + ...` |
-| sequence | `[f \| m \| b]` | bundle of permuted items: `ρ⁰(x0) + ρ¹(x1) + ...`, or nested binding with position vectors |
+| sequence | `(lvec [f ...] \| m \| [b ...])` | bundle of permuted items: `ρ⁰(x0) + ρ¹(x1) + ...`, or nested binding with position vectors |
 | open part | rest variable | an unknown summand: noise you haven't identified |
 
 `get` on a record is unbinding and cleanup: `k⊗(k1⊗v1 + k2⊗v2) ≈ v1 + noise`
@@ -45,8 +45,8 @@ codebook items it's close to. It enumerates them in order of similarity.
 **Factorisation**, `s = a ⊗ b ⊗ c` with all three unknown but each from a
 codebook, is what resonator networks solve (Frady, Kent, Olshausen and
 Sommer, 2020). In logic terms a resonator network is a *constraint solver*
-for a conjunction of `bindo` and `cleanupo` goals: it propagates estimates
-until they settle. That suggests plugging it in the way CLP(FD) is plugged
+for a conjunction of `bindo` and `cleanupo` goals: it iterates its estimates
+until they settle, which within its capacity they usually do. That suggests plugging it in the way CLP(FD) is plugged
 into core.logic: a constraint domain with its own propagator.
 
 ## Two designs
@@ -95,8 +95,9 @@ postponed, never dropped.
 ## Questions to settle
 
 - **Which family?** MAP or BSC, with exact self-inverse binding, makes
-  `bindo` exact. HRR and FHRR give continuous similarity but approximate
-  inverses.
+  `bindo` exact. HRR and FHRR give continuous similarity; HRR's inverse is
+  approximate, FHRR's (the complex conjugate) is exact, but its binding isn't
+  self-inverse.
 - **Codebooks as relations.** A codebook is a fact table: a `pldb` relation
   from symbols to hypervectors. Seeded, so reruns are reproducible.
 - **Learning.** Asking which codebook makes these encodings match is

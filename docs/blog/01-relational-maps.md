@@ -9,7 +9,8 @@ has a natural representation: a known front and an unbound tail, `(1 2 . _0)`.
 Clojure programs don't live in lists. They live in maps. And core.logic, until
 now, had no good answer for a map that is partly known. You could unify two
 maps with exactly the same keys, and `featurec` could require a map to have
-some entries, but nothing could build a map or take one apart. There was no `(get m k)` you could run
+some entries and read their values, but nothing could build a map or list its
+keys. There was no `(get m k)` you could run
 backwards, no `(assoc m k v)` that answers "what was `m`?".
 
 This fork adds them.
@@ -115,8 +116,9 @@ are logic variables:
 ```
 
 The last one has two answers because both pairings are real. Upstream
-core.logic would treat `k1` and `k2` as keys that happen to be symbols, and
-fail.
+core.logic looks keys up as they are, so the variables `k1` and `k2` are
+themselves the keys, never bound; they match neither `:a` nor `:b`, and the
+query fails.
 
 A Clojure map can't have two equal keys, and that holds here too, even if the
 keys only become equal later:

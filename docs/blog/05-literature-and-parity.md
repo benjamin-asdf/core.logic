@@ -38,16 +38,17 @@ open maps with known keys should never branch. The fork's tests now check that:
 
 Unknown keys are a different story. Treinen's "Feature Constraints with
 First-Class Features" (MFCS 1993) lets features be variables. With arity
-constraints, satisfiability becomes **NP-complete**. Without them it stays
-easy. And the first-order theory is undecidable once you quantify over
-features.
+constraints, satisfiability becomes **NP-complete**. Without them it is
+decidable by a simpler algorithm. And the ∀∃ fragment of the first-order
+theory is undecidable.
 
 That's exactly our plain maps with unknown keys: closed (arity) plus variable
 keys. So the branching over pairings in [part 2](02-no-unsupported-behaviour.md)
 isn't a weakness of the implementation. It's inherent, unless P = NP. It also
 says *when* it's inherent: only once a closed map or a lacks constraint fixes
-the exact key set. That's when the fork forces suspended unifications, and
-not before.
+the exact key set. Before that, the fork splits at most into "this key" or "a
+different key" and leaves the rest pending; it enumerates pairings only once
+the key set is fixed.
 
 Aït-Kaci's ψ-terms and OSF unification (LIFE; Aït-Kaci and Podelski, *JLP*
 1993) add sorts from a lattice to such records, and unify by taking the meet
@@ -72,7 +73,8 @@ fork fails it straight away, and now has a test for it.
 A map is a set of pairs where no two pairs share a key. Set unification is
 NP-complete (Kapur and Narendran, CADE 1986). {log} represents sets with
 rests, `{x | s}`, the same shape as our open maps (Dovier, Omodeo, Pontelli
-and Rossi, *JLP* 1996; *TOPLAS* 2000; *TPLP* 2006). Cristiá, Rossi and Frydman
+and Rossi, *JLP* 1996; Dovier, Piazza, Pontelli and Rossi, *TOPLAS* 2000; and
+the survey by Dovier, Pontelli and Rossi, *TPLP* 2006). Cristiá, Rossi and Frydman
 added partial functions to it (*TPLP* 2015), which is the closest match to
 maps with unknown keys.
 
@@ -82,9 +84,10 @@ check that each pairing comes out exactly once. For sets later, {log}'s design
 carries over directly: rests, a `∉` constraint, and residual constraints
 instead of enumeration.
 
-The closest prior art inside miniKanren is very recent: **ℤ-Kanren**, from
-Sanna, Byrd and Amin ("Beyond Cons: Purely Relational Data Structures",
-miniKanren Workshop 2025). It has first-class sets and association lists.
+The closest prior art inside miniKanren is very recent: **{Kanren}** (read
+"set-Kanren"), from Sanna, Byrd and Amin ("Beyond Cons: Purely Relational
+Data Structures", miniKanren Workshop 2025). It has first-class sets, and
+constraints for association lists with shadowing and scoped lookup.
 Their **chrKanren** (ICLP 2026) builds Constraint Handling Rules into
 miniKanren, with semantic unification of user-defined data as an
 application. That's an alternative to the hand-written constraints in this fork.
@@ -137,7 +140,7 @@ all but the third:
 5. ~~No port of faster-miniKanren's interpreter and quine benchmarks.~~
    The simple relational interpreter now runs as a test. It finds the classic
    quine `((lambda (x) (list x (list 'quote x))) '(lambda (x) (list x (list 'quote x))))`
-   in about 30 ms and a twine in about 0.2 s on the JVM.
+   in about 30 ms and a twine in about 0.3 s on the JVM.
 6. ~~FD domains aren't reified.~~ With `(fd/residual)` in a `run`, answers
    keep their FD variables unlabeled and show the domains and FD constraints
    left on them, like Prolog's CLP(FD). An answer is only given if labeling

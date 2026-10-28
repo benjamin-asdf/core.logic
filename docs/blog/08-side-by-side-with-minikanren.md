@@ -2,8 +2,9 @@
 
 *My core.logic fork, part 8 of 8.* [Index](README.md) · [← Sets](07-sets.md)
 
-faster-miniKanren is the reference miniKanren: the one used for the quine
-papers, program synthesis and *The Reasoned Schemer*'s second edition. This
+faster-miniKanren is the most widely used miniKanren: it runs the
+relational interpreters behind the quine and program-synthesis work
+(Barliman), and includes *The Reasoned Schemer*'s arithmetic. This
 post asks two questions:
 
 - Where core.logic and miniKanren overlap, do they give the same answers?
@@ -16,7 +17,8 @@ faster-miniKanren under Racket, core.logic on the JVM.
 ## Running miniKanren's own tests
 
 `script/fmk_tests.py` translates faster-miniKanren's test suite to
-core.logic: 355 tests of `==`, `=/=`, `symbolo`, `numbero`, `stringo`,
+core.logic: 355 of its 357 tests (two compute their expected answer and can't
+be translated), covering `==`, `=/=`, `symbolo`, `numbero`, `stringo`,
 `absento`, type inference, and the arithmetic of *The Reasoned Schemer*. The
 two systems print answers differently, so both sides are normalised before
 comparing (`_.0` and `_0`, `=/=` and `!=`, variable numbering, constraint
@@ -58,7 +60,8 @@ simplifies the same way:
 ```
 
 Now 352 of 355 agree, and all of them run with `lein test`, in about three
-seconds. The three skipped tests are documented in the script:
+seconds. The three tests that disagree are skipped and documented in the
+script:
 
 - **Search order:** one is `run 12` on an infinite stream, where a
   different search order gives a different first twelve.
@@ -86,7 +89,7 @@ Programs that only use lists translate line by line:
 ```
 
 ```clojure
-;; core.logic
+;; core.logic, in a namespace that excludes core.logic's own appendo
 (defrel appendo [l s out]
   (conde
     [(== '() l) (== s out)]
@@ -190,13 +193,10 @@ lengths one by one, and if the answer depends on lengths, it never finds out:
 
 (run 1 (x) (fresh (l r) (appendo x '(1) l) (appendo '(1) x r) (appendo r '(2) l)))
 ;;   no answer within 20 seconds
-
-(run 3 (x) (fresh (y) (appendo x '(1) y) (appendo '(1) x y)))
-;;   (() (1)) for run 2; the third answer doesn't come within 15 seconds
 ```
 
-The fork's vectors solve lengths first ([part 4](04-vectors.md)), so the
-first two fail at once and the third enumerates:
+The fork's vectors solve lengths first ([part 4](04-vectors.md)), so both
+fail at once:
 
 ```clojure
 (run* [x] (concato x [1] x))
@@ -204,10 +204,11 @@ first two fail at once and the third enumerates:
 
 (run* [x] (fresh [l r] (concato x [1] l) (concato [1] x r) (concato r [2] l)))
 ;;=> ()        ;; |x| + 1 ≠ |x| + 2
-
-(run 3 [x] (fresh [y] (concato x [1] y) (concato [1] x y)))
-;;=> ([] [1] [1 1])
 ```
+
+Where there are infinitely many answers, both enumerate them:
+`x ++ (1) = (1) ++ x` gives `(() (1) (1 1))` for `run 3` in faster-miniKanren
+and `([] [1] [1 1])` in the fork.
 
 Length reasoning doesn't make every word equation finite. When the lengths
 agree, as in `x ++ [1] = [2] ++ x`, only the elements show the conflict, and

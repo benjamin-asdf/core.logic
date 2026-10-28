@@ -74,7 +74,7 @@ enumerate exactly the possibilities:
 ```
 
 On sets of plain values they are a single `clojure.set` call: union and
-intersection of two 500-element sets take a few milliseconds.
+intersection of two 500-element sets take under a millisecond.
 
 ## What theory says
 
