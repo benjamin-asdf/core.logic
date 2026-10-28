@@ -81,8 +81,8 @@ lengths can't match fail at once:
 Vectors keep unifying with lists, as they are `=` in Clojure. See
 [the vectors post](docs/blog/04-vectors.md).
 
-**Paths (done, JVM).** `get-in` and `assoc-in` through any mix of maps and
-vectors, in every direction:
+**Paths and patterns (done, JVM).** `get-in` and `assoc-in` through any mix
+of maps and vectors, in every direction, and patterns to query with:
 
 ```clojure
 (run* [p] (get-ino {:a {:b 1} :c [1 {:d 1}]} p 1))
@@ -90,12 +90,17 @@ vectors, in every direction:
 
 (run* [m] (assoc-ino m [:a :b] 1 {:a {:b 1}}))
 ;;=> (nil {} {:a nil} {:a {}} {:a {:b _0}})   ;; every m assoc-in could start from
+
+(run* [p n] (fresh [u] (get-ino {:users [{:name "ada" :age 36} {:name "bob" :age 40}]} p u)
+                       (matcho u {:name n :age 40})))
+;;=> ([(:users 1) "bob"])              ;; where is someone aged 40, and who
 ```
 
 | Relation | Means |
 |---|---|
 | `(get-ino m ks v)` | `(get-in m ks)` is `v`, and the path `ks` exists |
 | `(assoc-ino m ks v out)` | `out` is `(assoc-in m ks v)`; missing levels become maps, as in Clojure |
+| `(matcho x p)` | `x` matches the pattern `p`: a map in `p` matches a map with *at least* its keys, a set a set with at least its elements, a vector a sequence of the same length, element by element; anything else unifies |
 
 **Relational sets (done, JVM).** Open sets hold known elements plus an unknown
 rest; set literals may hold unknown elements, which stay distinct:
@@ -207,6 +212,11 @@ map or vector relations yet.
   answer where the key was already there with some other value. To take a
   map apart into entries and a rest *without* that key, use
   `(lmapo m {:a x} r)`.
+- **A map literal unifies exactly; a pattern matches loosely.**
+  `(== x {:name n})` needs `x` to have no other key; `(matcho x {:name n})`
+  lets it have more. The pattern in `matcho` is Clojure data read when the
+  goal is built: a logic var in it stands for a value, never for a
+  sub-pattern.
 
 Changes from upstream
 ----

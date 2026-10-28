@@ -77,6 +77,10 @@ too:
 ;;=> ("ada")
 
 (run* [p] (get-ino db p "bob"))             ;;=> ((:users 1 :name))
+
+;; the same question as a pattern: at least these keys, at least this element
+(run* [n] (fresh [i u] (get-ino db [:users i] u) (matcho u {:name n :tags #{:admin}})))
+;;=> ("ada")
 ```
 
 ## Why this is the core.logic thing

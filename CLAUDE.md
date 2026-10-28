@@ -14,7 +14,7 @@ No unsupported behaviour: every relation is correct in every mode (answers, fail
 - FD answers: opt-in `(fd/residual)` shows domains and FD constraints instead of labeling, only if a solution exists; labeling stays the default.
 - Parity: faster-miniKanren's test suite is generated into src/test (script/fmk_tests.py, needs a faster-miniKanren checkout); 352/355 agree, 3 skips documented in the script.
 - Public fork: remote `fork` = github.com/benjamin-asdf/core.logic (master pushed there); `origin` is upstream clojure/core.logic, never push to it.
-- Website: the series is published on benjamin-schwerdtner.de via `python3 script/blog_org.py ~/repos/faster-than-light-memes/posts` (English org files; German `_de` files are translations kept in the site repo, patch them by hand when a post changes), then the site's `bb build` and `./publish.sh`. Feeds: none yet (FEED in the script) — Benjamin decided to keep the series out of atom/Planet Clojure until part 9.
+- Website: the series is published on benjamin-schwerdtner.de via `python3 script/blog_org.py ~/repos/faster-than-light-memes/posts` (English org files; German `_de` files are translations kept in the site repo, patch them by hand when a post changes), then the site's `bb build` and `./publish.sh`. Feeds (FEED in the script): only the index page (en, de) is a feed post, since 2026-10-28. When the site repo has other sessions' unpublished feed posts, upload atom.xml filtered to live entries plus ours, not a full publish.
 - Open: records as data-level type terms (schema inference, pldb registry), ClojureScript port; both in docs/future-work.md.
 
 Benjamin's own field is hyperdimensional computing (HDC/VSA); a relational HDC framework on top of this is of interest.
