@@ -4159,23 +4159,29 @@
            (== xs ())))
        (or (seq xs) ()) ys))))
 
+(declare set-elems)
+
 (defn keyso
-  "A relation where ks is a list of the keys of map m, in any order. Lists
-   every ordering if ks is unbound."
+  "A relation where ks is the set of the keys of map m. A set, not a seq:
+   the keys of a map have no order, so (keyso {:a 1 :b 2} ks) has one
+   answer, #{:a :b}. ks given as a vector or list fails, as (= #{:a} [:a])
+   is false."
   [m ks]
   (fn [s]
     (when-let [[s g n tail] (map-parts s m)]
       (if (nil? tail)
-        (let [all-keys (concat (keys g) (map first n))]
-          (if-let [kl (lmap-list s ks)]
-            ((lmap-permutationo s all-keys kl) s)
-            ((permuteo (or (seq all-keys) ()) ks) s)))
-        (if-let [kl (lmap-list s ks)]
-          (let [kl (map #(walk* s %) kl)]
-            ;; the same term twice cannot be two distinct keys
-            (when (= (count kl) (count (distinct kl)))
-              ((lmapo m (zipmap kl (repeatedly #(lvar 'v))) {}) s)))
-          ((lmap-suspend `keyso [m ks] #(keyso m ks) [m ks]) s))))))
+        ((== ks (into (set (keys g)) (map first n))) s)
+        (let [ks' (walk s ks)]
+          (cond
+            (set? ks')
+            (when-let [[s kl] (set-elems s ks)]
+              ((lmapo m (zipmap kl (repeatedly #(lvar 'v))) {}) s))
+
+            ;; wait until the map or the key set is closed
+            (or (lvar? ks') (lset? ks'))
+            ((lmap-suspend `keyso [m ks] #(keyso m ks) [m ks]) s)
+
+            :else nil))))))
 
 (defn- lmap-remove-each
   "A relation where the list l without one occurrence of each of xs is out."

@@ -4062,40 +4062,46 @@
 ;; -----------------------------------------------------------------------------
 ;; keyso
 
-(deftest test-keyso-every-order
-  (is (= (set (run* [ks]
-                    (keyso {:a 1 :b 2} ks)))
-         #{[:a :b] [:b :a]})))
+(deftest test-keyso-one-answer
+  ;; the keys of a map are a set: one answer, not every order
+  (is (= (run* [ks] (keyso {:a 1 :b 2} ks)) '(#{:a :b})))
+  (is (= (run* [ks] (keyso {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9 :j 10} ks))
+         [#{:a :b :c :d :e :f :g :h :i :j}])))
 
 (deftest test-keyso-empty-map
-  (is (= (run* [ks]
-               (keyso {} ks))
-         '(()))))
+  (is (= (run* [ks] (keyso {} ks)) '(#{}))))
 
-(deftest test-keyso-given-order
-  (is (= (run* [q]
-               (keyso {:a 1 :b 2} [:b :a])
-               (== q true))
-         '(true))))
+(deftest test-keyso-given-set
+  (is (= (run* [q] (keyso {:a 1 :b 2} #{:b :a}) (== q true)) '(true)))
+  (is (= (run* [q] (keyso {:a 1 :b 2} #{:a}) (== q true)) '())))
+
+(deftest test-keyso-not-a-set
+  ;; a vector of keys is not the key set, as (= #{:a} [:a]) is false
+  (is (= (run* [q] (keyso {:a 1} [:a]) (== q true)) '()))
+  (is (= (run* [m] (keyso m [:a])) '())))
 
 (deftest test-keyso-backward
-  (is (= (run* [m]
-               (keyso m [:x :y]))
-         '({:x _0 :y _1}))))
+  ;; which value is _0 depends on set order
+  (let [ms (run* [m] (keyso m #{:x :y}))]
+    (is (= 1 (count ms)))
+    (is (= #{:x :y} (set (keys (first ms)))))
+    (is (= '#{_0 _1} (set (vals (first ms)))))))
 
 (deftest test-keyso-closes-open-map
-  (is (= (run* [m]
-               (geto m :a 1)
-               (keyso m [:a :b]))
-         '({:a 1 :b _0}))))
+  (is (= (run* [m] (geto m :a 1) (keyso m #{:a :b})) '({:a 1 :b _0}))))
 
-(deftest test-keyso-with-membero
-  (is (= (run* [q]
-               (fresh [ks]
-                      (keyso {:a 1 :b 2} ks)
-                      (membero :a ks)
-                      (== q true)))
-         '(true true))))
+(deftest test-keyso-unknown-keys
+  ;; unknown keys pair up with the map's keys
+  (is (= (set (run* [x y] (keyso {:a 1 :b 2} #{x y}))) #{[:a :b] [:b :a]}))
+  (is (= (run* [x] (keyso {x 1 :b 2} #{:a :b})) '(:a))))
+
+(deftest test-keyso-waits
+  (is (= (run* [ks] (fresh [m] (keyso m ks) (== m {:a 1}))) '(#{:a})))
+  (is (= (run* [m] (fresh [ks] (keyso m ks) (== ks #{:a}))) '({:a _0}))))
+
+(deftest test-keyso-with-containso
+  (is (= (run* [q] (fresh [ks] (keyso {:a 1 :b 2} ks) (containso ks :a) (== q true)))
+         '(true))))
 
 ;; -----------------------------------------------------------------------------
 ;; valso
