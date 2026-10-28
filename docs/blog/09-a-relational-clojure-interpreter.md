@@ -87,11 +87,11 @@ body)` maps each input to its output:
 
 | Examples | Body found | Time |
 |---|---|---|
-| `1` → `[1 1]`, `2` → `[2 2]` | `[m m]` | 36 ms |
-| `{:a 1}` → `1`, `{:a 2}` → `2` | `(:a m)` | 33 ms |
-| `{:a 1}` → `{:a 1 :b 2}`, `{:a 5}` → `{:a 5 :b 2}` | `('{{:a 1} {:a 1 :b 2}, {:a 5} {:a 5 :b 2}} m)` | 0.2 s |
-| the same, with `(absento 1 body) (absento 5 body)` | `{:a (:a m) :b 2}` | 0.27 s |
-| the same, also without `:a` | `(assoc m :b 2)` | 2.1 s |
+| `1` → `[1 1]`, `2` → `[2 2]` | `[m m]` | 36 ms |
+| `{:a 1}` → `1`, `{:a 2}` → `2` | `(:a m)` | 33 ms |
+| `{:a 1}` → `{:a 1 :b 2}`, `{:a 5}` → `{:a 5 :b 2}` | `('{{:a 1} {:a 1 :b 2}, {:a 5} {:a 5 :b 2}} m)` | 0.2 s |
+| the same, with `(absento 1 body) (absento 5 body)` | `{:a (:a m) :b 2}` | 0.27 s |
+| the same, also without `:a` | `(assoc m :b 2)` | 2.1 s |
 
 The third answer is a lookup table of the examples: correct, and the
 cheapest program there is. Barliman forbids copying the examples into the
@@ -120,10 +120,10 @@ Searching for one is where this interpreter falls behind:
 
 | Search | Time to the first quine |
 |---|---|
-| faster-miniKanren's interpreter, in Racket | 2 ms |
-| the same interpreter ported to core.logic ([part 5](05-literature-and-parity.md)) | 16 ms |
-| this interpreter, body shaped as `(list e1 e2)` | 0.2 s |
-| this interpreter, shape `((fn [x] b) 'B)` only | 2.5 s |
+| faster-miniKanren's interpreter, in Racket | 2 ms |
+| the same interpreter ported to core.logic ([part 5](05-literature-and-parity.md)) | 16 ms |
+| this interpreter, body shaped as `(list e1 e2)` | 0.2 s |
+| this interpreter, shape `((fn [x] b) 'B)` only | 2.5 s |
 | this interpreter, `(evalo q q)` with `q` a call | none: runs out of a 4 GB heap |
 
 Without "a call", `(evalo q q)` answers `()` at once: the empty list
