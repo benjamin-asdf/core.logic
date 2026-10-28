@@ -2280,7 +2280,7 @@
 ;; the other vars are: one mentioning a var the answer doesn't show is
 ;; satisfied by choosing that var, and is left out.
 (def ^:private purgeable-rators
-  #{`!= `absento `symbolo `numbero `stringo})
+  #{`!= `absento `symbolo `numbero `stringo `keywordo})
 
 (defn- purgeable? [c]
   (and (instance? clojure.core.logic.protocols.IConstraintOp c)
@@ -2326,6 +2326,7 @@
     (symbol? x) `symbolo
     (number? x) `numbero
     (string? x) `stringo
+    (keyword? x) `keywordo
     :else ::other))
 
 (defn- simplify-residuals
@@ -2335,7 +2336,7 @@
   [names rcs]
   (let [types (into {} (keep (fn [f]
                                (when (and (seq? f) (= 2 (count f))
-                                          (#{`symbolo `numbero `stringo} (first f)))
+                                          (#{`symbolo `numbero `stringo `keywordo} (first f)))
                                  [(second f) (first f)])))
                     rcs)
         ;; u and v can never be equal because of their types
@@ -3690,7 +3691,12 @@
               (lmap-commit s rel args retry info)))
           IRunnable
           (-runnable? [_]
-            (boolean (some #(not (lvar? (walk s %))) watch)))))
+            (boolean
+             (if (:pick info)
+               ;; also when a watched var is bound to another var, which
+               ;; may be the map of another waiting pick of the same key
+               (some #(let [w (walk s %)] (or (not (lvar? w)) (not= w %))) watch)
+               (some #(not (lvar? (walk s %))) watch))))))
       IConstraintOp
       (-rator [_] rel)
       (-rands [_] watch)
@@ -3750,6 +3756,33 @@
 ;; -----------------------------------------------------------------------------
 ;; Picking an entry
 
+(declare absento)
+
+(defn- lmap-pick-wait
+  "Waits on the relation rel on args, which says t holds key k with value
+   x, until a var in watch-terms is bound. A key has one value, so other
+   waiting relations about the same key of the same t give the same value."
+  [s t k x rel args retry watch-terms]
+  (let [t* (walk s t)
+        k' (walk* s k)
+        cs (vals (:cm (:cs s)))
+        same (for [c cs
+                   :let [[t2 k2 x2] (:pick (::lmap-rel (meta c)))]
+                   :when (and t2 (= t* (walk s t2)) (= k' (walk* s k2)))]
+               x2)
+        ;; what is absent from t is absent from its keys and values
+        absent (for [c cs
+                     :let [[a2 t2] (:absent (::lmap-rel (meta c)))]
+                     :when (and t2 (= t* (walk s t2)))]
+                 a2)]
+    ((all (everyg #(== x %) same)
+          (everyg #(all (absento % k) (absento % x)) absent)
+          (fn [s]
+            ;; tells absento there is a waiting pick to look at
+            (lmap-pend (vary-meta s assoc ::picks true)
+                       rel args retry watch-terms false {:pick [t k x]})))
+     s)))
+
 (defn- lmap-picko
   "A relation where map t is the map t' plus key k with value x, and t'
    lacks k. Enumerates the entries of t if k is not ground. A nil t' means
@@ -3776,7 +3809,9 @@
                 (nil? tail') ((all (lmap-lacks t' [k'])
                                    (== t (assoc (map-term g' n' nil) k' x)))
                               s)
-                :else ((lmap-suspend rel args retry [t k t']) s))))
+                ;; a map can't hold a value that holds the map
+                (contains? (recover-vars-from-term (walk* s x)) (walk s t)) nil
+                :else (lmap-pick-wait s t k x rel args retry [t k t' x]))))
 
           (and (ground-key? k') (contains? g k'))
           ((all (== x (get g k'))
@@ -4009,7 +4044,7 @@
             (:other :set) nil
             :either (lmap-pend s `geto args #(geto m k v) [m k] true
                                {:force #(conde [(as-map)] [(as-seq)])})
-            ((lmap-suspend `geto args #(geto m k v) [m k]) s)))))))
+            (lmap-pick-wait s m k v `geto args #(geto m k v) [m k])))))))
 
 (defn dissoco
   "A relation where out is (dissoc m k)."
@@ -4854,6 +4889,8 @@
   [k]
   (and (integer? k) (not (neg? k))))
 
+(declare type-kind)
+
 (defn- coll-kind
   "Whether x is a map (:map), a sequence (:seq) or something else (:other),
    or nil if that is not known yet."
@@ -4862,7 +4899,8 @@
     (cond
       (lvar? x) (if-let [c (lmap-lacks-constraint s x)]
                   (::lacks-kind (meta c))
-                  (when (mid-len-link s x) :seq))
+                  (or (type-kind s x)
+                      (when (mid-len-link s x) :seq)))
       (or (map? x) (lmap? x)) :map
       (or (set? x) (lset? x)) :set
       (or (sequential? x) (lcons? x) (lvec? x)) :seq
@@ -5628,8 +5666,25 @@
   (-merge-doms [a b]
     (when (= t (.t ^TypeDom b)) a)))
 
+;; The collection kinds tell a list from a vector, which unify with each
+;; other as they are = in Clojure.
 (def ^:private type-preds
-  {:sym symbol? :num number? :str string?})
+  {:sym symbol? :num number? :str string? :kw keyword?
+   :list #(or (lcons? %) (seq? %))
+   :vector #(or (vector? %) (lvec? %))
+   :map #(or (map? %) (lmap? %))
+   :set #(or (set? %) (lset? %))})
+
+(defn- type-kind
+  "The collection kind (see coll-kind) the type constraint on the var x
+   gives, or nil if it has none."
+  [s x]
+  (when-let [d (get-dom s x ::type)]
+    (case (.t ^TypeDom d)
+      :map :map
+      (:vector :list) :seq
+      :set :set
+      :other)))
 
 (defn- -typec [x t rel]
   (reify
@@ -5678,6 +5733,11 @@
   [x]
   (typeo :str `stringo x))
 
+(defn keywordo
+  "A constraint that x is a keyword."
+  [x]
+  (typeo :kw `keywordo x))
+
 (defn- term-children
   "The subterms of the walked term x, or nil if it has none."
   [x]
@@ -5703,7 +5763,17 @@
           ((all
             ;; x is a subterm of itself, and a var t may become x
             (if (ground-term? t' s) succeed (!= x' t'))
-            (lmap-suspend `absento [t x] #(absento t x) [x])) s))
+            ;; the keys and values waiting relations put into x
+            (everyg (fn [[k v]] (all (absento t k) (absento t v)))
+                    (when (::picks (meta s))
+                      (for [c (vals (:cm (:cs s)))
+                            :let [[m2 k2 v2] (:pick (::lmap-rel (meta c)))]
+                            :when (and m2 (= x' (walk s m2)))]
+                        [k2 v2])))
+            (fn [s]
+              (lmap-pend s `absento [t x] #(absento t x) [x] false
+                         {:absent [t x]})))
+           s))
 
         :else
         ((all

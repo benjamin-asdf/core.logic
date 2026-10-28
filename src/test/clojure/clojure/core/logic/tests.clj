@@ -4840,3 +4840,19 @@
   (is (= (run* [e r] (lmapo {:a 1} e r) (== e {:a 1})) '([{:a 1} {}])))
   (is (= (count (run* [e r] (lmapo {:a 1} e r))) 1))
   (is (= (run* [r] (lmapo {:a 1} [1] r)) '())))
+
+(deftest test-keywordo
+  (is (= (run* [q] (keywordo q) (== q :a)) [:a]))
+  (is (= (run* [q] (keywordo q) (== q 'a)) []))
+  (is (= (run* [q] (keywordo q) (symbolo q)) [])))
+
+(deftest test-geto-one-value-per-key
+  ;; a key has one value, also while map and key are unknown
+  (is (= (run* [m k] (geto m k 1) (geto m k 2)) []))
+  (is (= (run* [m k] (lacks-keyo m :z) (geto m k 1) (geto m k 2)) []))
+  (is (= (run* [m n k] (geto m k 1) (geto n k 2) (== m n)) []))
+  ;; a map can't hold itself
+  (is (= (run* [m k] (lacks-keyo m :z) (geto m k [m])) []))
+  ;; what is absent from a map is absent from what geto puts in it
+  (is (= (run* [m k] (lacks-keyo m :z) (absento 1 m) (geto m k [1])) []))
+  (is (= (run* [m k] (lacks-keyo m :z) (geto m k [1]) (absento 1 m)) [])))
