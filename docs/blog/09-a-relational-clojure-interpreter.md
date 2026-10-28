@@ -87,8 +87,8 @@ body)` maps each input to its output:
 
 | Examples | Body found | Time |
 |---|---|---|
-| `1` → `[1 1]`, `2` → `[2 2]` | `[m m]` | 0.44 s |
-| `{:a 1}` → `1`, `{:a 2}` → `2` | `(:a m)` | 0.23 s |
+| `1` → `[1 1]`, `2` → `[2 2]` | `[m m]` | about 0.5 s |
+| `{:a 1}` → `1`, `{:a 2}` → `2` | `(:a m)` | 0.2–0.5 s |
 | `{:a 1}` → `{:a 1 :b 2}`, `{:a 5}` → `{:a 5 :b 2}` | none within a minute | |
 
 The third needs `(assoc m :b 2)`, a call with three arguments, and the
@@ -118,7 +118,7 @@ Searching for one is where this interpreter falls behind:
 |---|---|
 | faster-miniKanren's interpreter, in Racket | 2 ms |
 | the same interpreter ported to core.logic ([part 5](05-literature-and-parity.md)) | 16 ms |
-| this interpreter, body shaped as `(list e1 e2)` | 0.66 s |
+| this interpreter, body shaped as `(list e1 e2)` | 0.7 s |
 | this interpreter, shape `((fn [x] b) 'B)` only | none within 5 minutes |
 | this interpreter, `(evalo q q)` with `q` a call | none within 5 minutes |
 
@@ -126,14 +126,15 @@ Without "a call", `(evalo q q)` answers `()` at once: the empty list
 evaluates to itself, as do `nil`, numbers and keywords.
 
 The quine it finds with the shape given is the classic one, in Clojure
-syntax, with `x` any symbol that isn't a primitive's name:
+syntax, with `x` any symbol other than a primitive's name or `&`:
 
 ```clojure
 ((fn [_0] (list _0 (list (quote quote) _0)))
  (quote (fn [_0] (list _0 (list (quote quote) _0)))))
 ```
 
-The interpreter in faster-miniKanren's quine paper has five forms: `quote`,
+The interpreter in the quine paper, which faster-miniKanren keeps in its
+tests, has five forms: `quote`,
 `list`, symbols, one-argument application and one-argument `lambda`. This
 one has many more ways to build each subexpression: six kinds of
 constants, `if`, `let`, any number of arguments, literal vectors, maps and
@@ -169,12 +170,12 @@ Building this found gaps in the fork itself, all now fixed with tests:
 ## What's slow or missing
 
 - **Synthesis beyond small programs.** The table above: two-node bodies in
-  under half a second, a four-node call not within a minute, and quines only
+  about half a second, a four-node call not within a minute, and quines only
   with a shape given. faster-miniKanren's interpreters get their speed from
   a small language and a carefully ordered search; this one has neither
   yet.
-- **Answers that wait.** A program that calls unknown quoted data, like
-  `(:k 'M)`, gives an answer with a waiting `geto`, since neither the map
+- **Answers that wait.** A program that applies a keyword not yet chosen to
+  unknown quoted data, `(_0 '_1)`, gives an answer with a waiting `geto`, since neither the map
   nor the key is known. These are correct, as conditions, but they aren't
   programs you'd write.
 - **Left out of the language:** `def`, `do`, `loop`/`recur`, multi-arity
@@ -182,5 +183,6 @@ Building this found gaps in the fork itself, all now fixed with tests:
   and set elements that aren't constants, chars, and the rest of
   `clojure.core`. An expression outside the subset fails in every mode.
 - **Where it differs from Clojure,** it fails where Clojure returns nil:
-  `get` with an index a vector lacks, `get` on a list, `assoc` on nil.
+  `get` with an index a vector lacks or a key on a vector that is neither
+  an index nor a keyword, `get` on a list, `assoc` on nil.
   `=` fails on fns, which Clojure compares by identity.
