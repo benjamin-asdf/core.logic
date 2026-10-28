@@ -8,7 +8,7 @@ map sizes 10, 100 and 1000. Some were fine. Some were not:
 | Operation, n = 1000 | Before | After |
 |---|---|---|
 | n × `geto` building an unknown map | 33 s | 8.2 ms |
-| `keyso` / `valso` with a given key list | factorial: did not finish at n = 10 | 0.4 ms |
+| `valso` with a given value list | factorial: did not finish at n = 10 | 0.4 ms |
 | `mergeo m m` | 465 ms | 0.5 ms |
 | `==` with an unknown key into a large map | 97 ms | 1.5 ms |
 | `geto` enumerating all keys | 49 ms | 2.3 ms |
@@ -34,17 +34,15 @@ store stays linear.
 
 ## Factorial when it should be linear
 
-`keyso` says "these are the keys, in any order", and the obvious relational
-definition is `permuteo`. With the key list given, `permuteo` searches orderings:
-factorial in the length: bare `permuteo` takes seconds at ten keys, and the old
-`keyso` built on it didn't finish. (`keyso` has since become a relation on
-the set of keys, with no orderings at all, see [part 1](01-relational-maps.md);
-`valso` still works as described here.)
+`valso` says "these are the values, in any order", and the obvious relational
+definition is `permuteo`. With the value list given, `permuteo` searches
+orderings, factorial in the length: bare `permuteo` takes 1.5 s at ten
+elements, and the first `valso` built on it didn't finish.
 
 When everything is known, the question is just "same multiset?", one
 frequency count. When some elements are unknown, removing them one at a time
 branches only where an element is unknown. `permuteo` is left for the one
-case that needs it: the key list itself unknown, where every ordering is a
+case that needs it: the value list itself unknown, where every ordering is a
 separate answer.
 
 ## Not computing what nobody asked for
