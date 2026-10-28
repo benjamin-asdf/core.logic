@@ -84,18 +84,35 @@ built it, including the overwritten values:
 ;;=> ({:a 1} {:a 1, :b _0})
 ```
 
+## The basic form: `lmapo`
+
+One relation has no counterpart in `clojure.core`, because it is what the
+open map is made of: `(lmapo m entries rest)`, `m` is `entries` plus a map
+`rest` that has none of their keys. It's `conj` for maps, without the
+overwriting. `(conj r [:a 1])` replaces an `:a` that `r` already had, so run
+backwards it has two cases. `lmapo` says `r` has no `:a`, so there is one, the
+way `(cons x xs)` never displaces anything:
+
+```clojure
+(run* [r] (conjo r [:a 1] {:a 1 :b 2}))      ;;=> ({:b 2} {:b 2, :a _0})
+(run* [r] (lmapo {:a 1 :b 2} {:a 1} r))      ;;=> ({:b 2})
+(run* [x r] (lmapo {:a 1 :b 2 :c 3} {:a x} r))  ;;=> ([1 {:b 2, :c 3}])
+```
+
+It also builds: with everything unknown, `(lmapo m {:a 1} r)` answers the open
+map `(lmap {:a 1} | _0)` at once, and that printed form is this relation:
+these entries, plus a rest without their keys.
+
 The rest of the API:
 
 | Relation | Means |
 |---|---|
 | `(keyso m ks)` / `(valso m vs)` | the keys / values of `m`, in any order |
 | `(selectso m ks out)` | `out` is `(select-keys m ks)` |
-| `(lmapo m entries rest)` | `m` is `entries` plus a map `rest` without their keys |
 | `(lacks-keyo m & ks)` | `m` has none of the keys `ks` |
 
 ```clojure
 (run* [ks] (keyso {:a 1 :b 2} ks))                  ;;=> ((:a :b) (:b :a))
-(run* [x r] (lmapo {:a 1 :b 2 :c 3} {:a x} r))      ;;=> ([1 {:b 2, :c 3}])
 (run* [out] (selectso {:a 1 :b 2 :c 3} [:a :c] out)) ;;=> ({:c 3, :a 1})
 ```
 

@@ -37,7 +37,8 @@ Everything from [part 2](02-no-unsupported-behaviour.md) carries over, with
 ## Relations
 
 `containso`, `lackso`, `conjo`, `disjo` and `lseto` are the set versions of
-`geto`, `lacks-keyo`, `assoco`, `dissoco` and `lmapo`, and every one runs in
+`geto`, `lacks-keyo`, `assoco`, `dissoco` and `lmapo` (`lseto` is the set's
+basic form: `conj` of elements that weren't there yet), and every one runs in
 every direction:
 
 ```clojure

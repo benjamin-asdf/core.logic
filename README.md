@@ -41,7 +41,7 @@ map relation runs in every direction:
 | `(mergeo m1 m2 out)` | `out` is `(merge m1 m2)` |
 | `(keyso m ks)` / `(valso m vs)` | the keys / values of `m`, in any order |
 | `(selectso m ks out)` | `out` is `(select-keys m ks)` |
-| `(lmapo m entries rest)` | `m` is `entries` plus a map `rest` without their keys |
+| `(lmapo m entries rest)` | `m` is `entries` plus a map `rest` without their keys: `conj` for maps, without overwriting |
 | `(lacks-keyo m & ks)` | `m` has none of the keys `ks` |
 
 Plain Clojure maps are relational too: `(== {k 1} {:a 1})` binds `k` to
