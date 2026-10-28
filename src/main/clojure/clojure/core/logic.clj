@@ -2274,7 +2274,7 @@
        (verify-all-bound a constrained)
        ((onceo (force-ans constrained)) a)))))
 
-(declare recover-vars-from-term simplify-residuals term-children)
+(declare recover-vars-from-term simplify-residuals term-children reify-constraints*)
 
 ;; Constraints that hold for some value of any var they mention, whatever
 ;; the other vars are: one mentioning a var the answer doesn't show is
@@ -2296,23 +2296,29 @@
 (defn reify-constraints
   ([v r a] (reify-constraints v r a nil))
   ([v r a extra]
-   (let [cs    (->> (:cm (:cs a)) (sort-by key) vals (filter reifiable?))
-         shown (into #{} (mapcat #(constraint-vars a %)) (remove purgeable? cs))
-         shown? #(or (contains? shown %) (not (lvar? (walk r %))))
-         cs    (filter #(or (not (purgeable? %))
-                            (every? shown? (constraint-vars a %)))
-                       cs)
-         ;; name the vars only constraints show, the same in each
-         r     (-reify* (vary-meta r assoc ::answer-names (set (vals (:s r))))
-                        (vec (mapcat #(sort-by str (constraint-vars a %)) cs)))
-         rcs   (->> cs
-                    (map #(-reifyc % v r a))
-                    (filter #(not (nil? %)))
-                    (into (set extra))
-                    (simplify-residuals (set (vals (:s r)))))]
-     (if (empty? rcs)
-       (choice v empty-f)
-       (choice `(~v :- ~@rcs) empty-f)))))
+   (if (and (empty? (:cm (:cs a))) (empty? extra))
+     ;; nothing to show: skip naming and simplifying, which cost per answer
+     (choice v empty-f)
+     (reify-constraints* v r a extra))))
+
+(defn- reify-constraints* [v r a extra]
+  (let [cs    (->> (:cm (:cs a)) (sort-by key) vals (filter reifiable?))
+        shown (into #{} (mapcat #(constraint-vars a %)) (remove purgeable? cs))
+        shown? #(or (contains? shown %) (not (lvar? (walk r %))))
+        cs    (filter #(or (not (purgeable? %))
+                           (every? shown? (constraint-vars a %)))
+                      cs)
+        ;; name the vars only constraints show, the same in each
+        r     (-reify* (vary-meta r assoc ::answer-names (set (vals (:s r))))
+                       (vec (mapcat #(sort-by str (constraint-vars a %)) cs)))
+        rcs   (->> cs
+                   (map #(-reifyc % v r a))
+                   (filter #(not (nil? %)))
+                   (into (set extra))
+                   (simplify-residuals (set (vals (:s r)))))]
+    (if (empty? rcs)
+      (choice v empty-f)
+      (choice `(~v :- ~@rcs) empty-f))))
 
 (defn- value-type [names x]
   (cond
