@@ -2714,9 +2714,12 @@
     IReifiableConstraint
     (-reifyc [this v r a]
       ;; disunify again, to show the pairs of vars and atoms left; when a
-      ;; pair can't hold any more, the constraint holds
-      (when-let [cs (reduce (fn [cs [u v]] (or (disunify a u v cs) (reduced nil)))
-                            {:prefixc {}} p)]
+      ;; pair can't hold any more, the constraint holds. Without this
+      ;; constraint in the store: disunifying maps and vectors unifies the
+      ;; pair, which this constraint would forbid.
+      (when-let [cs (let [a ((remcg this) a)]
+                      (reduce (fn [cs [u v]] (or (disunify a u v cs) (reduced nil)))
+                              {:prefixc {}} p))]
         (let [p* (-reify a (map (fn [[lhs rhs]] `(~lhs ~rhs)) (:prefixc cs)) r)]
           (if (empty? p*)
             '()
@@ -3348,7 +3351,10 @@
               (first (coll-parts s m))))
           IRunnable
           (-runnable? [_]
-            (boolean (some #(not (lvar? (walk s %))) watch)))))
+            ;; a key got a value, or two keys became the same var
+            (let [ws (map #(walk s %) watch)]
+              (boolean (or (some #(not (lvar? %)) ws)
+                           (and (next ws) (not (apply distinct? ws)))))))))
       IConstraintOp
       (-rator [_] `distincto)
       (-rands [_] watch)
@@ -3942,7 +3948,16 @@
    rest of m, or builds m from them."
   [m entries rest]
   (fn [s]
-    ((lmap-matcho (walk-keys s entries) rest m `lmapo [m entries rest]) s)))
+    (let [entries' (walk s entries)]
+      (cond
+        (map? entries')
+        ((lmap-matcho (walk-keys s entries') rest m `lmapo [m entries rest]) s)
+
+        ;; wait until the entries are known
+        (or (lvar? entries') (lmap? entries'))
+        ((lmap-suspend `lmapo [m entries rest] #(lmapo m entries rest) [entries]) s)
+
+        :else nil))))
 
 (defn lacks-keyo
   "A relation where map m has none of the keys ks."
@@ -5223,7 +5238,8 @@
                          ground (filter ground-key? es)
                          nonground (vec (remove ground-key? es))
                          g' (set ground)]
-                     (when (clojure.core/== (count g') (count ground))
+                     (when (and (clojure.core/== (count g') (count ground))
+                                (apply distinct? nil nonground))
                        (when-let [g (add-ground g g')]
                          (let [n (mapv (fn [e] [e e]) nonground)]
                            (if (and (seq nonground) (> (count x) 1))
@@ -5418,8 +5434,17 @@
    unbound."
   [s elems rest]
   (fn [a]
-    (let [es (map #(walk* a %) (walk a elems))]
-      ((set-pick-each es rest s `lseto [s elems rest]) a))))
+    (let [elems' (walk a elems)]
+      (cond
+        (set? elems')
+        (let [es (map #(walk* a %) elems')]
+          ((set-pick-each es rest s `lseto [s elems rest]) a))
+
+        ;; wait until the elements are known
+        (or (lvar? elems') (lset? elems'))
+        ((lmap-suspend `lseto [s elems rest] #(lseto s elems rest) [elems]) a)
+
+        :else nil))))
 
 (defn containso
   "A relation where set s contains x, i.e. (contains? s x). Enumerates the

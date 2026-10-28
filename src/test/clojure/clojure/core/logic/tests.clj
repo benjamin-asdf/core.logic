@@ -4687,6 +4687,10 @@
   (is (= (run* [x] (uniono #{:cat x} #{} #{:cat})) '()))
   (is (= (run* [x] (subseto #{:cat x} #{:cat})) '()))
   (is (= (run* [x] (intersectiono #{:cat x} #{:cat} #{:cat}) (== x :cat)) '()))
+  ;; two element vars bound to each other
+  (is (= (run* [x y] (fresh [s] (== s #{x y}) (== x y))) '()))
+  (is (= (run* [x y] (== x y) (fresh [s] (== s #{x y}))) '()))
+  (is (= (run* [x y z] (fresh [s] (== s #{x y z}) (== x z))) '()))
   ;; the union from the upstream wiki's CLP(Set) page
   (is (= (set (run* [x y z] (uniono #{:cat x y} #{:dog :bird z} #{:cat :dog :bird})))
          #{[:dog :bird :cat] [:bird :dog :cat]})))
@@ -4816,3 +4820,23 @@
   ;; subsumed
   (is (= (run* [q] (fresh [x y] (== q [x y]) (!= x 5) (!= [x y] [5 6])))
          '(([_0 _1] :- (!= (_0 5)))))))
+
+(deftest test-map-keys-var-collision
+  ;; two key vars bound to each other: the map would lose an entry
+  (is (= (run* [x y] (fresh [m] (== m {x 1 y 2}) (== x y))) '()))
+  (is (= (run* [x y] (fresh [m] (== m {x 1 y 2}))) '(([_0 _1] :- (clojure.core.logic/distincto [_0 _1]))))))
+
+(deftest test-disequality-map-residual
+  ;; the leftover disequality on a map with an unknown key is shown
+  (is (= (run* [k] (!= {k 1} {:a 1})) '((_0 :- (!= ({_0 1} {:a 1}))))))
+  (is (= (run* [k] (!= {k 1} {:a 1}) (== k :a)) '()))
+  (is (= (run* [k] (!= {k 1} {:a 1}) (== k :b)) '(:b))))
+
+(deftest test-lseto-lmapo-unbound-parts
+  ;; with the elements or entries unbound, lseto and lmapo wait
+  (is (= (run* [e r] (lseto #{1 2} e r) (== e #{1})) '([#{1} #{2}])))
+  (is (= (count (run* [e r] (lseto #{1 2} e r))) 1))
+  (is (= (run* [r] (lseto #{1 2} [1] r)) '()))
+  (is (= (run* [e r] (lmapo {:a 1} e r) (== e {:a 1})) '([{:a 1} {}])))
+  (is (= (count (run* [e r] (lmapo {:a 1} e r))) 1))
+  (is (= (run* [r] (lmapo {:a 1} [1] r)) '())))
