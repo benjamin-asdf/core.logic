@@ -39,7 +39,8 @@ map relation runs in every direction:
 | `(assoco m k v out)` | `out` is `(assoc m k v)` |
 | `(dissoco m k out)` | `out` is `(dissoc m k)` |
 | `(mergeo m1 m2 out)` | `out` is `(merge m1 m2)` |
-| `(keyso m ks)` / `(valso m vs)` | the keys / values of `m`, in any order |
+| `(keyso m ks)` | `ks` is the set of the keys of `m` |
+| `(valso m vs)` | the values of `m`, in any order |
 | `(selectso m ks out)` | `out` is `(select-keys m ks)` |
 | `(lmapo m entries rest)` | `m` is `entries` plus a map `rest` without their keys: `conj` for maps, without overwriting |
 | `(lacks-keyo m & ks)` | `m` has none of the keys `ks` |
@@ -192,6 +193,20 @@ itself.
 
 Status: JVM only for now. The ClojureScript namespace does not have the
 map or vector relations yet.
+
+### Pitfalls
+
+- **`keyso` relates a map to the *set* of its keys**, not to a seq as
+  `keys` returns: `(keyso {:a 1 :b 2} ks)` gives `#{:a :b}`, once. A vector
+  of keys fails, `(keyso m [:a :b])` has no answers, just as
+  `(= #{:a :b} [:a :b])` is false. Write `(keyso m #{:a :b})`. A seq would
+  have to list every order of the keys, n! answers for one map.
+- **`valso` is a seq in any order**, because values can repeat, so with an
+  unbound `vs` it does list every order.
+- **`conjo` on a map overwrites**, like `conj`: run backwards it has a second
+  answer where the key was already there with some other value. To take a
+  map apart into entries and a rest *without* that key, use
+  `(lmapo m {:a x} r)`.
 
 Changes from upstream
 ----

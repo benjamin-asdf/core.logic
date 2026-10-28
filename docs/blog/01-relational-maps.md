@@ -37,7 +37,7 @@ rest never overlap. Ask for more and the open map grows:
 Close it by saying what all the keys are:
 
 ```clojure
-(run* [m] (geto m :a 1) (geto m :b 2) (keyso m [:a :b]))
+(run* [m] (geto m :a 1) (geto m :b 2) (keyso m #{:a :b}))
 ;;=> ({:a 1, :b 2})
 ```
 
@@ -107,18 +107,26 @@ The rest of the API:
 
 | Relation | Means |
 |---|---|
-| `(keyso m ks)` / `(valso m vs)` | the keys / values of `m`, in any order |
+| `(keyso m ks)` | `ks` is the set of the keys of `m` |
+| `(valso m vs)` | the values of `m`, in any order |
 | `(selectso m ks out)` | `out` is `(select-keys m ks)` |
 | `(lacks-keyo m & ks)` | `m` has none of the keys `ks` |
 
 ```clojure
-(run* [ks] (keyso {:a 1 :b 2} ks))                  ;;=> ((:a :b) (:b :a))
+(run* [ks] (keyso {:a 1 :b 2} ks))                  ;;=> (#{:a :b})
 (run* [out] (selectso {:a 1 :b 2 :c 3} [:a :c] out)) ;;=> ({:c 3, :a 1})
 ```
 
-`keyso` lists every order because Clojure doesn't promise one. A relation that
-returned only `(:a :b)` would fail on a query asking for `(:b :a)`, which is a
-perfectly good key list.
+`keyso` answers a set, where Clojure's `keys` returns a seq. The seq's order
+is whatever the map happens to hold, and it means nothing: `{:a 1 :b 2}` and
+`{:b 2 :a 1}` are the same map. A relation can't pick one order without
+failing a query that asks for another, so a seq of keys would have to list
+every order: n! answers for one fact, 3.6 million for ten keys. The keys of a
+map are a set, so `keyso` says so and has one answer. Sets are relational
+([part 7](07-sets.md)), so the key set can be partly known, and unknown keys
+pair up with the map's. The flip side: `(keyso m [:a :b])` fails, as
+`(= #{:a :b} [:a :b])` is false. `valso` stays a seq in any order, since
+values can repeat.
 
 ## Plain maps with unknown keys
 

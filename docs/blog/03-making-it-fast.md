@@ -37,7 +37,9 @@ store stays linear.
 `keyso` says "these are the keys, in any order", and the obvious relational
 definition is `permuteo`. With the key list given, `permuteo` searches orderings:
 factorial in the length: bare `permuteo` takes seconds at ten keys, and the old
-`keyso` built on it didn't finish.
+`keyso` built on it didn't finish. (`keyso` has since become a relation on
+the set of keys, with no orderings at all, see [part 1](01-relational-maps.md);
+`valso` still works as described here.)
 
 When everything is known, the question is just "same multiset?", one
 frequency count. When some elements are unknown, removing them one at a time
