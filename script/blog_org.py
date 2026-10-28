@@ -78,6 +78,12 @@ def fix_verbatim(org, codes):
         return f'@@html:<code>{c}</code>@@'
     piped = [c.replace('\\|', '|') for c in codes if '\\|' in c]
 
+    # =a=/=b=: org ends no verbatim before a /, so write the pair as HTML
+    def html_pair(m):
+        return '@@html:' + '/'.join(html_code(re.match(r'(.*)', c))[7:-2]
+                                    for c in m.groups()) + '@@'
+    org = re.sub(r'=([^=\s]+)=/=([^=\s]+)=', html_pair, org)
+
     def fix_row(row):
         row = row.group(0)
         for c in piped:
