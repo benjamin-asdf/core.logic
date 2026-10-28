@@ -109,8 +109,8 @@ disjointness. Both now re-attach the constraints to copied rests.
 
 ## What it costs
 
-The upstream benchmarks zebra, nrev, n-queens, sudoku, dinesman and magic
-square run within noise of upstream. Queries that return many answers pay per
-answer: `appendo` with 700 answers is about 1.5× slower, `membero` over 1000
-elements about 13%, and unifying tiny maps a few percent. The relations themselves had problems of their own:
+The upstream benchmarks (zebra, nrev, n-queens, sudoku, dinesman, magic
+square, and `appendo` and `membero` returning hundreds of answers) run within
+noise of upstream. A microbenchmark of unifying tiny maps is a few percent
+slower. The relations themselves had problems of their own:
 [Making it fast](03-making-it-fast.md).
