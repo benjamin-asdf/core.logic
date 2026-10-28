@@ -38,7 +38,7 @@ environment, so they shadow too, and can be passed around.
 
 ## Forwards
 
-Every answer below is from running it. Times are on a warm JVM.
+Every answer below is from running it. Times: one fresh JVM per query, best of 3 to 5 after a warmup run.
 
 ```clojure
 (run* [v] (evalo '(let [x 1 y [x 2]] {:a y :b (get {:c 3} :c)}) v))
@@ -67,7 +67,7 @@ doing the work, inside an interpreter:
 (run* [k1 k2]
   (keywordo k1) (keywordo k2)
   (eval-expo (list 'get (list 'get 'm k1) k2) (env-with {'m {:a {:b 1} :c 2}}) 1))
-;;=> ([:a :b])                     ;; the key path to 1, in 6 ms
+;;=> ([:a :b])                     ;; the key path to 1, in 2.5 ms
 ```
 
 ## Backwards: programs
@@ -87,12 +87,16 @@ body)` maps each input to its output:
 
 | Examples | Body found | Time |
 |---|---|---|
-| `1` → `[1 1]`, `2` → `[2 2]` | `[m m]` | about 0.5 s |
-| `{:a 1}` → `1`, `{:a 2}` → `2` | `(:a m)` | 0.2–0.5 s |
-| `{:a 1}` → `{:a 1 :b 2}`, `{:a 5}` → `{:a 5 :b 2}` | none within a minute | |
+| `1` → `[1 1]`, `2` → `[2 2]` | `[m m]` | 36 ms |
+| `{:a 1}` → `1`, `{:a 2}` → `2` | `(:a m)` | 33 ms |
+| `{:a 1}` → `{:a 1 :b 2}`, `{:a 5}` → `{:a 5 :b 2}` | `('{{:a 1} {:a 1 :b 2}, {:a 5} {:a 5 :b 2}} m)` | 0.2 s |
+| the same, with `(absento 1 body) (absento 5 body)` | `{:a (:a m) :b 2}` | 0.27 s |
+| the same, also without `:a` | `(assoc m :b 2)` | 2.1 s |
 
-The third needs `(assoc m :b 2)`, a call with three arguments, and the
-search doesn't get there. Given the shape of the call, it takes 3 ms:
+The third answer is a lookup table of the examples: correct, and the
+cheapest program there is. Barliman forbids copying the examples into the
+program the same way, with `absento`. Given the shape of the call, the
+last one takes 5 ms:
 
 ```clojure
 (run 1 [b]
@@ -109,7 +113,7 @@ A quine in Clojure syntax runs forwards, and evaluates to itself:
 ```clojure
 (def quine '((fn [x] (list x (list 'quote x)))
              '(fn [x] (list x (list 'quote x)))))
-(run* [v] (evalo quine v))   ;;=> (quine), in 3 ms
+(run* [v] (evalo quine v))   ;;=> (quine), in 2.4 ms
 ```
 
 Searching for one is where this interpreter falls behind:
@@ -118,9 +122,9 @@ Searching for one is where this interpreter falls behind:
 |---|---|
 | faster-miniKanren's interpreter, in Racket | 2 ms |
 | the same interpreter ported to core.logic ([part 5](05-literature-and-parity.md)) | 16 ms |
-| this interpreter, body shaped as `(list e1 e2)` | 0.7 s |
-| this interpreter, shape `((fn [x] b) 'B)` only | none within 5 minutes |
-| this interpreter, `(evalo q q)` with `q` a call | none within 5 minutes |
+| this interpreter, body shaped as `(list e1 e2)` | 0.2 s |
+| this interpreter, shape `((fn [x] b) 'B)` only | 2.5 s |
+| this interpreter, `(evalo q q)` with `q` a call | none: runs out of a 4 GB heap |
 
 Without "a call", `(evalo q q)` answers `()` at once: the empty list
 evaluates to itself, as do `nil`, numbers and keywords.
@@ -166,14 +170,34 @@ Building this found gaps in the fork itself, all now fixed with tests:
   Each of these now fails. A waiting `geto` also wakes when its map var is
   unified with another var, so that two waiting `geto`s of the same key
   meet.
+- **Searches that never ended.** The first version of this post had fn
+  bodies at 0.2–0.5 s, and neither the assoc examples nor the
+  `((fn [x] b) 'B)` quine found within minutes. The interpreter barely
+  changed for the numbers above. The relations under it had cases that ran
+  forever, or overflowed the stack, where they should fail or act, and the
+  searches were full of them:
+  - an element at an unknown index of an open vector that would have to
+    contain the vector, or something `absento` keeps out of it: every
+    position was tried, forever
+  - two lookups at the same unknown index giving different elements
+  - `conjo` on a var already known to be a vector waited instead of
+    acting, and chains of those overflowed the stack
+  - an `assoc` at an unknown index into a known result gave its answers
+    and then never ended
+  - `absento` scanned every constraint in the store on every call
+
+  Each now fails or acts at once, as the map relations already did. Every
+  one broke the rule of [part 2](02-no-unsupported-behaviour.md), outside
+  the interpreter too.
 
 ## What's slow or missing
 
-- **Synthesis beyond small programs.** The table above: two-node bodies in
-  about half a second, a four-node call not within a minute, and quines only
-  with a shape given. faster-miniKanren's interpreters get their speed from
-  a small language and a carefully ordered search; this one has neither
-  yet.
+- **The unshaped quine search.** `(evalo q q)` with only "q is a call"
+  fills a 4 GB heap before it finds one. Every var under a `quote` carries
+  a constraint that keeps fn values out of quoted data, and the search makes
+  millions of them. faster-miniKanren's interpreters also get their speed
+  from a small language and a carefully ordered search; this one has
+  neither yet.
 - **Answers that wait.** A program that applies a keyword not yet chosen to
   unknown quoted data, `(_0 '_1)`, gives an answer with a waiting `geto`, since neither the map
   nor the key is known. These are correct, as conditions, but they aren't
