@@ -84,6 +84,16 @@ built it, including the overwritten values:
 ;;=> ({:a 1} {:a 1, :b _0})
 ```
 
+Nested data has `get-ino` and `assoc-ino`, with the path as one more
+argument. Asking for the path asks where a value is:
+
+```clojure
+(run* [p] (get-ino {:users [{:name "ada"} {:name "bob"}]} p "bob"))
+;;=> ((:users 1 :name))
+```
+
+More of that, through maps and vectors, in [part 4](04-vectors.md#paths-get-ino-and-assoc-ino).
+
 ## The basic form: `lmapo`
 
 One relation has no counterpart in `clojure.core`, because it is what the

@@ -144,6 +144,7 @@ And lengths that can't match fail before any enumeration. Here
 | `(subveco v start end out)` | `out` is `(subvec v start end)` |
 | `(concato a b out)` | `out` is the elements of `a`, then those of `b` |
 | `(geto v i x)`, `(assoco v i x out)` | as `get`/`assoc` on vectors |
+| `(get-ino m ks v)`, `(assoc-ino m ks v out)` | `get-in`/`assoc-in`, through maps and vectors |
 
 ```clojure
 (run* [a b] (concato a b [1 2 3]))
@@ -171,6 +172,69 @@ is an index, the relation waits, and tries both before the answer comes out:
 (run* [m] (geto m 0 1))
 ;;=> ((lmap {0 1} | _0) (lvec [1] | _0 | []))
 ```
+
+## Paths: `get-ino` and `assoc-ino`
+
+That chain of `geto`s is `get-in`, so it has a name. `(get-ino m ks v)` says
+`(get-in m ks)` is `v`, through any mix of maps and vectors, and the path is
+just another argument. Take some data:
+
+```clojure
+(def db {:users [{:name "ada" :age 36} {:name "bob" :age 40}]
+         :admin {:name "ada" :age 36}})
+```
+
+Forwards it is `get-in`. With the path unknown, it finds where a value is:
+
+```clojure
+(run* [x] (get-ino db [:users 1 :name] x))   ;;=> ("bob")
+(run* [p] (get-ino db p "ada"))              ;;=> ((:admin :name) (:users 0 :name))
+```
+
+Part of a path can be unknown, and the value can be a pattern. Together
+that's a small query language with nothing added:
+
+```clojure
+(run* [i n] (get-ino db [:users i :name] n))
+;;=> ([0 "ada"] [1 "bob"])
+
+(run* [p a] (get-ino db p {:name "ada" :age a}))
+;;=> ([(:admin) 36] [(:users 0) 36])         ;; every map that is ada, and where
+
+(run* [p n] (fresh [u] (get-ino db p u) (geto u :age 40) (geto u :name n)))
+;;=> ([(:users 1) "bob"])                    ;; anything aged 40, whatever its other keys
+```
+
+A map literal as the value matches exactly those keys. For "at least these
+keys", the last query adds `geto`s on `u`, which leaves the rest of `u` open.
+
+With the data unknown, it says what the data must look like, and doesn't
+decide whether `:users` is a map with key 0 or a vector:
+
+```clojure
+(run 2 [d] (get-ino d [:users 0 :name] "bob"))
+;;=> ((lmap {:users (lmap {0 (lmap {:name "bob"} | _0)} | _1)} | _2)
+;;    (lmap {:users (lvec [(lmap {:name "bob"} | _0)] | _1 | [])} | _2))
+```
+
+`assoc-ino` is `assoc-in`. Backwards, given the data before and after, it
+finds the path that changed, and given only the result, every value
+`assoc-in` could have started from:
+
+```clojure
+(run* [out] (assoc-ino db [:users 1 :age] 41 out))
+;;=> ({:admin {:name "ada", :age 36}, :users [{:name "ada", :age 36} {:name "bob", :age 41}]})
+
+(run* [p] (assoc-ino db p 37 (assoc-in db [:admin :age] 37)))
+;;=> ((:admin :age))
+
+(run* [m] (assoc-ino m [:a :b] 1 {:a {:b 1}}))
+;;=> (nil {} {:a nil} {:a {}} {:a {:b _0}})
+```
+
+That last one is Clojure's `assoc-in` read backwards: `nil` counts as an
+empty map, and missing levels are created, so all five start values give
+`{:a {:b 1}}`.
 
 ## Vectors and lists
 

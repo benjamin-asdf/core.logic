@@ -66,7 +66,8 @@ answers correctly in every mode, or waits until it can
    together.
 3. [Making it fast](03-making-it-fast.md): from 33 s to 8 ms, and what was
    slow.
-4. [Vectors](04-vectors.md): open vectors, and lengths solved exactly.
+4. [Vectors](04-vectors.md): open vectors, lengths solved exactly, and
+   `get-in` as a query language.
 5. [Literature and miniKanren parity](05-literature-and-parity.md): where this
    sits in the research, and what core.logic still lacks.
 6. [Towards relational hyperdimensional computing](06-relational-hdc.md): the
