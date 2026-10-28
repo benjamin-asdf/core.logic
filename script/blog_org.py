@@ -11,6 +11,8 @@ from pathlib import Path
 REPO = 'https://github.com/benjamin-asdf/core.logic'
 DATE = '2026-10-28 Wed'
 TAGS = ['clojure', 'logic', 'programming', 'public']
+# identifiers of the posts in atom.xml and Planet Clojure (the :feed: tag)
+FEED = set()
 
 # source file, identifier of the English version (German is +1), base name
 POSTS = [
@@ -88,7 +90,7 @@ def main(out_dir):
         body = fix_verbatim(body, codes)
         head = (f'#+title:      {title}\n'
                 f'#+date:       [{DATE}]\n'
-                f'#+filetags:   :{":".join(TAGS + ["feed"])}:\n'
+                f'#+filetags:   :{":".join(TAGS + (["feed"] if ident in FEED else []))}:\n'
                 f'#+identifier: {ident}\n'
                 f'#+LANGUAGE: en\n'
                 f'#+OPTIONS: toc:nil\n'
