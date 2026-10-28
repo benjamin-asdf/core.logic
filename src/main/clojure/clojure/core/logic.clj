@@ -3733,7 +3733,12 @@
   [a]
   (let [info #(::lmap-rel (meta %))]
     (if-let [c (when (pos? (count (:cs a)))
-                 (first (filter #(:ambiguous (info %)) (vals (:cm (:cs a))))))]
+                 (let [amb (filter #(:ambiguous (info %)) (vals (:cm (:cs a))))]
+                   ;; finitely many alternatives first: they may decide the
+                   ;; relations whose alternatives never end (:unbounded),
+                   ;; which would otherwise be enumerated forever
+                   (or (first (remove #(:unbounded (info %)) amb))
+                       (first amb))))]
       ((all
         (remcg c)
         ((or (:force (info c)) (:retry (info c))))
@@ -4768,7 +4773,8 @@
       ;; m1 with elements around it equal to itself with others around it: a
       ;; word equation, decided by enumerating the length of m1 at the end
       :else (lmap-pend s `== [u v] #(== u v) [u v] true
-                       {:force #(fresh []
+                       {:unbounded true
+                        :force #(fresh []
                                        (fn [a] (when-let [[a l] (seq-len a m1)]
                                                  ((len-enumg l) a)))
                                        (== u v))}))
@@ -4905,19 +4911,23 @@
    unbound; an i with a finite domain is labeled instead."
   [v i pre x post rel args]
   (fn [s]
-    (let [i' (walk s i)]
+    (let [i' (walk s i)
+          [pf pm :as pre-parts] (when pre (seq-parts s pre))]
       (cond
         (integer? i') (when-not (neg? i')
                         ((seq-split-at v i' pre x post rel args) s))
+        ;; the length of a closed pre is the index
+        (and pre-parts (nil? pm))
+        ((all (== i (count pf)) (seq-split-at v (count pf) pre x post rel args)) s)
         ;; positions of a closed sequence are enumerated right away, as the
         ;; entries of a map are
         (and (lvar? i') (not (get-dom-fd s i)) (nil? (second (seq-parts s v))))
         ((seq-split-enum v i pre x post rel args) s)
 
         (lvar? i')
-        (let [[f m b] (seq-parts s v)
+        (let [[f mid b] (seq-parts s v)
               ;; v is nothing but its unknown middle, so x is in it
-              m (when (and m (empty? f) (empty? b)) m)
+              m (when (and mid (empty? f) (empty? b)) mid)
               v* (walk s v)
               ;; a position has one element, so other waiting splits at
               ;; the same position of the same sequence give the same one
@@ -4930,6 +4940,8 @@
             (if m (seq-elem-checks m x) succeed)
             (fn [s]
               (let [info {:split [v i x]
+                          ;; the positions in an open v never end
+                          :unbounded (and mid (not (get-dom-fd s i)))
                           :force #(fn [a]
                                     (if (get-dom-fd a i)
                                       ((all (force-ans i)
@@ -4937,8 +4949,9 @@
                                        a)
                                       ((seq-split-enum v i pre x post rel args) a)))}
                     retry #(seq-splito v i pre x post rel args)]
-                ;; absento looks at waiting elements, as at waiting picks
-                (lmap-pend-pick s rel args retry [v i] true
+                ;; absento looks at waiting elements, as at waiting picks;
+                ;; wakes on pre, which may tell the index
+                (lmap-pend-pick s rel args retry [v i pre] true
                                 (if m (assoc info :elem [m x]) info)))))
            s))
         :else nil))))
@@ -5011,7 +5024,8 @@
           (if (empty? (lin-terms (lin-walk s l)))
             ((== n (lin-const (lin-walk s l))) s)
             (lmap-pend s `counto [c n] #(seq-counto c n) [c n] true
-                       {:force #(fn [a]
+                       {:unbounded (not (get-dom-fd s n))
+                        :force #(fn [a]
                                   (if (get-dom-fd a n)
                                     ((all (force-ans n) (seq-counto c n)) a)
                                     ((all (len-enumg l) (seq-counto c n)) a)))}))

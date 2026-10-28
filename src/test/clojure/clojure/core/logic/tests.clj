@@ -4885,6 +4885,15 @@
     (is (= (run* [i] (fresh [v w] (vectoro* v) (vectoro* w) (geto v i 1) (geto w i 2) (== v w))) []))
     (is (= (map pr-str (run 2 [i v x] (vectoro* v) (geto v i 1) (geto v i x)))
            ["[0 (lvec [1] | _0 | []) 1]" "[1 (lvec [_0 1] | _1 | []) 1]"])))
+  (testing "assoc into a closed sequence: the index is the length of what
+            comes before"
+    (is (= (run* [i m] (vectoro* m) (assoco m i 9 [1 9 3])) '([1 [1 _0 3]])))
+    (is (= (run* [i m] (vectoro* m) (assoco m i 9 '(1 2 9))) '([2 [1 2]] [2 [1 2 _0]])))
+    ;; the split of m waits, concato of the result has finitely many
+    ;; alternatives: those are tried first, and decide the split
+    (is (= (run* [i m x] (fresh [a b c d] (assoco m i x (list a b c d))))
+           '([3 [_0 _1 _2] _3] [0 [_0 _1 _2 _3] _4] [1 [_0 _1 _2 _3] _4]
+                               [2 [_0 _1 _2 _3] _4] [3 [_0 _1 _2 _3] _4]))))
   (testing "answers that hold are kept"
     (is (= (map pr-str (run 2 [i v] (vectoro* v) (absento 2 v) (geto v i 1)))
            ["([0 (lvec [1] | _0 | [])] :- (clojure.core.logic/absento 2 _0))"
