@@ -191,8 +191,7 @@ Forwards it is `get-in`. With the path unknown, it finds where a value is:
 (run* [p] (get-ino db p "ada"))              ;;=> ((:admin :name) (:users 0 :name))
 ```
 
-Part of a path can be unknown, and the value can be a pattern. Together
-that's a small query language with nothing added:
+Part of a path can be unknown, and the value can have unknown parts:
 
 ```clojure
 (run* [i n] (get-ino db [:users i :name] n))
@@ -200,13 +199,31 @@ that's a small query language with nothing added:
 
 (run* [p a] (get-ino db p {:name "ada" :age a}))
 ;;=> ([(:admin) 36] [(:users 0) 36])         ;; every map that is ada, and where
-
-(run* [p n] (fresh [u] (get-ino db p u) (geto u :age 40) (geto u :name n)))
-;;=> ([(:users 1) "bob"])                    ;; anything aged 40, whatever its other keys
 ```
 
-A map literal as the value matches exactly those keys. For "at least these
-keys", the last query adds `geto`s on `u`, which leaves the rest of `u` open.
+A map literal unifies exactly: `{:name "ada" :age a}` finds maps with those
+two keys and no others. To ask for *at least* some keys, `matcho` takes a
+pattern: a map in it matches a map with at least its keys, a set a set with
+at least its elements, a vector a sequence of its length, all nested. With
+`get-ino` that's a small query language:
+
+```clojure
+(run* [p n] (fresh [u] (get-ino db p u) (matcho u {:age 40 :name n})))
+;;=> ([(:users 1) "bob"])                    ;; anything aged 40, whatever its other keys
+
+(run* [p] (fresh [u] (get-ino db p u) (matcho u {:name "ada"})))
+;;=> ((:admin) (:users 0))
+
+(run* [a b] (matcho db {:users [{:name a} {:name b}]}))
+;;=> (["ada" "bob"])
+```
+
+`matcho` runs backwards too: with `x` unknown, `(matcho x {:a {:b 1}})`
+answers `(lmap {:a (lmap {:b 1} | _0)} | _1)`, the open map the pattern
+describes. The pattern itself is Clojure data, read when the goal is built,
+so a logic var in it stands for a value, not for a sub-pattern. It
+generalizes `featurec`, which waits until the map is known instead of
+building it, and looks into nested maps but not into vectors or sets.
 
 With the data unknown, it says what the data must look like, and doesn't
 decide whether `:users` is a map with key 0 or a vector:
