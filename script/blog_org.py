@@ -12,7 +12,7 @@ REPO = 'https://github.com/benjamin-asdf/core.logic'
 DATE = '2026-10-28 Wed'
 TAGS = ['clojure', 'logic', 'programming', 'public']
 # identifiers of the posts in atom.xml and Planet Clojure (the :feed: tag)
-FEED = set()
+FEED = {'20261028T100000'}
 
 # source file, identifier of the English version (German is +1), base name
 POSTS = [
