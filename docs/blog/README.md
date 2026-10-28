@@ -5,6 +5,80 @@ every relation runs in every direction, and anything it can't decide yet, it
 waits on visibly instead of guessing. The code and an overview are in the
 [repository README](../../README.md).
 
+## What it looks like
+
+Each relation is a Clojure function read as a relation, so any argument can
+be the unknown one.
+
+**Maps.** `get`, `assoc`, `merge`, `conj` and `keys`, forwards and backwards:
+
+```clojure
+(run* [v] (geto {:a 1 :b 2} :b v))          ;;=> (2)
+(run* [k] (geto {:a 1 :b 2} k 2))           ;;=> (:b)          which key holds 2
+
+(run* [m] (assoco m :b 2 {:a 1 :b 2}))
+;;=> ({:a 1} {:a 1, :b _0})                 ;; m had no :b, or any :b that assoc overwrote
+
+(run* [m1 m2] (mergeo m1 m2 {:a 1}))
+;;=> ([{:a 1} {}] [{} {:a 1}] [{:a _0} {:a 1}])
+
+(run* [q] (fresh [v] (conjo q [:foo v] {:foo 1})))
+;;=> ({} {:foo _0})                         ;; the wiki's test case, below
+
+(run* [k] (== {:a 1 k 2} {:a 1 :b 2}))      ;;=> (:b)          unknown keys unify
+(run* [ks] (keyso {:a 1 :b 2} ks))          ;;=> (#{:b :a})
+
+(run* [m] (geto m :a 1) (geto m :b 2))
+;;=> ((lmap {:b 2, :a 1} | _0))             ;; an open map: these keys, maybe more
+```
+
+**Vectors.** `nth`, `conj`, `concat`, `subvec`, with lengths solved exactly:
+
+```clojure
+(run* [i] (ntho [:a :b :a] i :a))           ;;=> (0 2)
+(run* [v x] (conjo v x [1 2 3]))            ;;=> ([[1 2] 3])
+(run* [s e] (subveco [:a :b :c :d] s e [:b :c]))
+;;=> ([1 3])                                ;; where the slice came from
+
+(run* [a b] (concato a b [1 2 3]))
+;;=> ([[] [1 2 3]] [[1] [2 3]] [[1 2] [3]] [[1 2 3] []])
+
+(run* [v] (counto v 2) (ntho v 0 :a))       ;;=> ([:a _0])
+
+(run* [x] (fresh [l r] (concato x [1] l) (concato [1] x r) (concato r [2] l)))
+;;=> ()                                     ;; |x| + 1 ≠ |x| + 2, no search needed
+```
+
+**Sets.** Literals with unknown elements, `conj`, `union`, `difference`:
+
+```clojure
+(run* [x y] (== #{x y} #{1 2}))             ;;=> ([1 2] [2 1])
+(run* [s] (conjo s 3 #{1 2 3}))             ;;=> (#{1 3 2} #{1 2})
+(run* [a] (uniono a #{2 3} #{1 2 3}))       ;;=> (#{1 3} #{1} #{1 3 2} #{1 2})
+(run* [x] (subseto #{1 x} #{1 2 3}))        ;;=> (3 2)         x is distinct from 1
+
+(run* [x] (differenceo #{1 2 3} x #{1}))
+;;=> (((lset #{3 2} | _0) :- (clojure.core.logic/lackso _0 1)))
+;; 2 and 3, plus a rest without 1
+
+(run* [s] (containso s 1) (containso s 2))
+;;=> ((lset #{1 2} | _0))
+```
+
+**Together.** The relations compose across kinds, and paths are relations
+too:
+
+```clojure
+(def db {:users [{:name "ada" :tags #{:admin}} {:name "bob" :tags #{}}]})
+
+(run* [n] (fresh [us u tags]
+            (geto db :users us) (ntho us (lvar) u)
+            (geto u :name n) (geto u :tags tags) (containso tags :admin)))
+;;=> ("ada")
+
+(run* [p] (get-ino db p "bob"))             ;;=> ((:users 1 :name))
+```
+
 ## Why this is the core.logic thing
 
 A logic language takes its terms from its host. miniKanren's term is the
