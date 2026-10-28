@@ -4850,6 +4850,22 @@
    [(== i k) (seq-split-at v k pre x post rel args)]
    [(seq-split-from v i (inc k) pre x post rel args)]))
 
+(defn- seq-elem-checks
+  "A goal for what x being an element of the unknown middle m of a sequence
+   implies at every position: x doesn't hold m, and what is absent from m is
+   absent from x. Run before the positions in the middle are enumerated, it
+   fails once where each of the infinitely many positions would fail."
+  [m x]
+  (fn [s]
+    (let [m (walk s m)]
+      (when-not (contains? (recover-vars-from-term (walk* s x)) m)
+        ((everyg #(absento % x)
+                 (for [c (vals (:cm (:cs s)))
+                       :let [[t2 x2] (:absent (::lmap-rel (meta c)))]
+                       :when (and x2 (= m (walk s x2)))]
+                   t2))
+         s)))))
+
 (defn- seq-split-enum
   "seq-split-at for every position i of v."
   [v i pre x post rel args]
@@ -4860,7 +4876,8 @@
          (for [n (range (count f))]
            (all (== i n) (seq-split-at v n pre x post rel args)))
          (when m
-           [(seq-split-from v i (count f) pre x post rel args)])))
+           [(all (seq-elem-checks m x)
+                 (seq-split-from v i (count f) pre x post rel args))])))
        s))))
 
 (defn- seq-splito
@@ -4878,13 +4895,24 @@
         (and (lvar? i') (not (get-dom-fd s i)) (nil? (second (seq-parts s v))))
         ((seq-split-enum v i pre x post rel args) s)
 
-        (lvar? i') (lmap-pend s rel args #(seq-splito v i pre x post rel args) [v i] true
-                              {:force #(fn [a]
-                                         (if (get-dom-fd a i)
-                                           ((all (force-ans i)
-                                                 (seq-splito v i pre x post rel args))
-                                            a)
-                                           ((seq-split-enum v i pre x post rel args) a)))})
+        (lvar? i')
+        (let [[f m b] (seq-parts s v)
+              ;; v is nothing but its unknown middle, so x is in it
+              m (when (and m (empty? f) (empty? b)) m)]
+          ((all
+            (if m (seq-elem-checks m x) succeed)
+            (fn [s]
+              ;; :elem tells absento there is a waiting element to look at
+              (lmap-pend (if m (vary-meta s assoc ::picks true) s)
+                         rel args #(seq-splito v i pre x post rel args) [v i] true
+                         {:elem (when m [m x])
+                          :force #(fn [a]
+                                    (if (get-dom-fd a i)
+                                      ((all (force-ans i)
+                                            (seq-splito v i pre x post rel args))
+                                       a)
+                                      ((seq-split-enum v i pre x post rel args) a)))})))
+           s))
         :else nil))))
 
 ;; -----------------------------------------------------------------------------
@@ -4895,7 +4923,7 @@
   [k]
   (and (integer? k) (not (neg? k))))
 
-(declare type-kind)
+(declare type-kind type-conj-kind)
 
 (defn- coll-kind
   "Whether x is a map (:map), a sequence (:seq) or something else (:other),
@@ -4918,8 +4946,9 @@
   [s x]
   (let [x (walk s x)]
     (cond
-      (lvar? x) (when-let [c (lmap-lacks-constraint s x)]
-                  (::lacks-kind (meta c)))
+      (lvar? x) (if-let [c (lmap-lacks-constraint s x)]
+                  (::lacks-kind (meta c))
+                  (type-conj-kind s x))
       (or (set? x) (lset? x)) :set
       (or (vector? x) (lvec? x)) :vec
       (or (lcons? x) (sequential? x)) :list
@@ -5692,6 +5721,18 @@
       :set :set
       :other)))
 
+(defn- type-conj-kind
+  "Where conj adds to the var x (see conj-kind) by its type constraint, or
+   nil if it has none that says."
+  [s x]
+  (when-let [d (get-dom s x ::type)]
+    (case (.t ^TypeDom d)
+      :vector :vec
+      :list :list
+      :map :map
+      :set :set
+      nil)))
+
 (defn- -typec [x t rel]
   (reify
     IConstraintStep
@@ -5769,13 +5810,18 @@
           ((all
             ;; x is a subterm of itself, and a var t may become x
             (if (ground-term? t' s) succeed (!= x' t'))
-            ;; the keys and values waiting relations put into x
-            (everyg (fn [[k v]] (all (absento t k) (absento t v)))
+            ;; the keys and values waiting relations put into x, and the
+            ;; elements they put into x as a sequence
+            (everyg #(absento t %)
                     (when (::picks (meta s))
                       (for [c (vals (:cm (:cs s)))
-                            :let [[m2 k2 v2] (:pick (::lmap-rel (meta c)))]
-                            :when (and m2 (= x' (walk s m2)))]
-                        [k2 v2])))
+                            :let [info (::lmap-rel (meta c))
+                                  [m2 k2 v2] (:pick info)
+                                  [m3 x3] (:elem info)]
+                            y (cond
+                                (and m2 (= x' (walk s m2))) [k2 v2]
+                                (and m3 (= x' (walk s m3))) [x3])]
+                        y)))
             (fn [s]
               (lmap-pend s `absento [t x] #(absento t x) [x] false
                          {:absent [t x]})))

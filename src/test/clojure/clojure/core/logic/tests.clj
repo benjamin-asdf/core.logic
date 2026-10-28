@@ -4862,3 +4862,46 @@
   ;; what is absent from a map is absent from what geto puts in it
   (is (= (run* [m k] (lacks-keyo m :z) (absento 1 m) (geto m k [1])) []))
   (is (= (run* [m k] (lacks-keyo m :z) (geto m k [1]) (absento 1 m)) [])))
+
+(def ^:private vectoro* #(@#'clojure.core.logic/typeo :vector `vectoro %))
+
+(deftest test-seq-element-at-unknown-index
+  ;; an element at an unknown position of an open vector: these used to
+  ;; enumerate the positions forever, each failing on its own
+  (testing "a vector can't hold itself"
+    (is (= (run* [i] (fresh [v] (vectoro* v) (geto v i (list v)))) []))
+    (is (= (run* [i] (fresh [v] (vectoro* v) (geto v i [:a (list 1 v)]))) []))
+    (is (= (run* [i] (fresh [v x] (vectoro* v) (geto v i x) (== x (list v)))) []))
+    (is (= (run* [i] (fresh [v] (vectoro* v) (ntho v i (list v)))) []))
+    (is (= (run* [i] (fresh [v a] (vectoro* v) (conjo a 1 v) (geto v i (list v)))) [])))
+  (testing "what is absent from a vector is absent from its elements"
+    (is (= (run* [i] (fresh [v] (vectoro* v) (absento 1 v) (geto v i 1))) []))
+    (is (= (run* [i] (fresh [v] (vectoro* v) (geto v i 1) (absento 1 v))) []))
+    (is (= (run* [i] (fresh [v] (vectoro* v) (geto v i [1]) (absento 1 v))) [])))
+  (testing "answers that hold are kept"
+    (is (= (map pr-str (run 2 [i v] (vectoro* v) (absento 2 v) (geto v i 1)))
+           ["([0 (lvec [1] | _0 | [])] :- (clojure.core.logic/absento 2 _0))"
+            "([1 (lvec [_0 1] | _1 | [])] :- (clojure.core.logic/absento 2 _1) (clojure.core.logic/absento 2 _0))"]))
+    (is (= (map pr-str (run 2 [i v] (fresh [a] (vectoro* v) (geto v i (list a)))))
+           ["[0 (lvec [(_0)] | _1 | [])]" "[1 (lvec [_0 (_1)] | _2 | [])]"]))
+    ;; an element of the known front may hold the middle, one in the
+    ;; middle may not
+    (is (= (run* [i] (fresh [m v] (vectoro* m) (== v (lcons (list m) m)) (geto v i (list m))))
+           [0]))))
+
+(defn- conj-chaino
+  ;; v is a vector of n elements built by n conjos on typed vectors, the
+  ;; innermost bound last
+  [n v]
+  (if (zero? n)
+    (== v [])
+    (fresh [v0]
+           (vectoro* v0)
+           (conjo v0 n v)
+           (conj-chaino (dec n) v0))))
+
+(deftest test-conjo-on-typed-vector
+  ;; conjo acts on a var whose type says it is a vector, instead of waiting
+  ;; in a chain that unwinds n deep once the innermost var is bound
+  (is (= (run* [v] (vectoro* v) (conj-chaino 3 v)) [[1 2 3]]))
+  (is (= (count (first (run* [v] (vectoro* v) (conj-chaino 1000 v)))) 1000)))
