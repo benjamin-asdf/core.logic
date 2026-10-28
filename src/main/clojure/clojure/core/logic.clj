@@ -5839,6 +5839,18 @@
     (coll? x) (seq x)
     :else nil))
 
+(defn- waiting-put-terms
+  "The keys and values waiting relations put into the var x, and the
+   elements they put into x as a sequence."
+  [s x]
+  (for [info (waiting-picks s)
+        :let [[m2 k2 v2] (:pick info)
+              [m3 x3] (:elem info)]
+        y (cond
+            (and m2 (= x (walk s m2))) [k2 v2]
+            (and m3 (= x (walk s m3))) [x3])]
+    y))
+
 (defn absento
   "A constraint that the term t occurs nowhere in the term x."
   [t x]
@@ -5846,22 +5858,31 @@
     (let [t' (walk* s t)
           x' (walk s x)]
       (cond
+        ;; an atom: look through x, and what waiting relations put into its
+        ;; vars, with a stack of its own, so that long terms don't overflow
+        ;; the call stack; wait on each var
+        (and (ground-term? t' s) (not (coll? t')) (not (tree-term? t')))
+        (loop [todo [x'] s s]
+          (if (seq todo)
+            (let [y (walk s (peek todo))
+                  todo (pop todo)]
+              (cond
+                (lvar? y)
+                (let [more (waiting-put-terms s y)]
+                  (when-let [s (lmap-pend s `absento [t y] #(absento t y) [y] false
+                                          {:absent [t y]})]
+                    (recur (into todo more) s)))
+                (= y t') nil
+                :else (recur (into todo (term-children y)) s)))
+            s))
+
         (lvar? x')
         (if (identical? x' t')
           nil
           ((all
             ;; x is a subterm of itself, and a var t may become x
             (if (ground-term? t' s) succeed (!= x' t'))
-            ;; the keys and values waiting relations put into x, and the
-            ;; elements they put into x as a sequence
-            (everyg #(absento t %)
-                    (for [info (waiting-picks s)
-                          :let [[m2 k2 v2] (:pick info)
-                                [m3 x3] (:elem info)]
-                          y (cond
-                              (and m2 (= x' (walk s m2))) [k2 v2]
-                              (and m3 (= x' (walk s m3))) [x3])]
-                      y))
+            (everyg #(absento t %) (waiting-put-terms s x'))
             (fn [s]
               (lmap-pend s `absento [t x] #(absento t x) [x] false
                          {:absent [t x]})))
@@ -5869,9 +5890,7 @@
 
         :else
         ((all
-          (if (and (ground-term? t' s) (not (coll? t')) (not (tree-term? t')))
-            (if (= x' t') fail succeed)
-            (!= x' t'))
+          (!= x' t')
           (everyg #(absento t' %) (term-children x')))
          s)))))
 

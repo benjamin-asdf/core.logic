@@ -4905,6 +4905,15 @@
     (is (= (run* [i] (fresh [m v] (vectoro* m) (== v (lcons (list m) m)) (geto v i (list m))))
            [0]))))
 
+(deftest test-absento-long-term
+  ;; absento of an atom looks through a long term without overflowing the
+  ;; stack, past nil elements, and waits on the vars it finds
+  (let [long-list (fn [n tail] (reduce #(lcons %2 %1) tail (concat (range n) [nil])))]
+    (is (= (run* [q] (fresh [t] (absento :a q) (== q (long-list 5000 t)) (== t (list :a)))) []))
+    (is (= (run* [q] (fresh [t] (absento :a q) (== q (long-list 100 t)) (== t (list :b))))
+           [(long-list 100 (list :b))]))
+    (is (= (run* [q] (absento :a q) (== q (cons nil (cons :a ())))) []))))
+
 (defn- conj-chaino
   ;; v is a vector of n elements built by n conjos on typed vectors, the
   ;; innermost bound last
