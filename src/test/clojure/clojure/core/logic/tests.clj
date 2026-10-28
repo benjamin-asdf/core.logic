@@ -4862,3 +4862,61 @@
   ;; what is absent from a map is absent from what geto puts in it
   (is (= (run* [m k] (lacks-keyo m :z) (absento 1 m) (geto m k [1])) []))
   (is (= (run* [m k] (lacks-keyo m :z) (geto m k [1]) (absento 1 m)) [])))
+
+;; -----------------------------------------------------------------------------
+;; lmapo and lseto with nothing to take still need a map or a set
+
+(deftest test-lmapo-lseto-empty-kind
+  (is (= (run* [r] (lmapo 5 {} r)) []))
+  (is (= (run* [r] (lmapo [1] {} r)) []))
+  (is (= (run* [r] (lmapo {:a 1} {} r)) '({:a 1})))
+  (is (= (run* [m r] (lmapo m {} r)) '(([_0 _0] :- (clojure.core.logic/mapo _0)))))
+  (is (= (run* [m] (fresh [r] (lmapo m {} r) (== m 5))) []))
+  (is (= (run* [r] (lseto 5 #{} r)) []))
+  (is (= (run* [r] (lseto #{1} #{} r)) '(#{1})))
+  (is (= (run* [s] (fresh [r] (lseto s #{} r) (== s {:a 1}))) [])))
+
+;; -----------------------------------------------------------------------------
+;; matcho
+
+(def ^:private matcho-db
+  {:users [{:name "ada" :age 36 :tags #{:admin}} {:name "bob" :age 40 :tags #{}}]
+   :admin {:name "ada" :age 36}})
+
+(deftest test-matcho-maps
+  ;; at least these keys
+  (is (= (run* [q] (matcho {:a {:b 1 :c 2} :d 3} {:a {:b q}})) '(1)))
+  (is (= (run* [q] (matcho {:a 1} {:a 1 :b q})) []))
+  (is (= (run* [k] (matcho {:a 1 :b 2} {k 2})) '(:b)))
+  ;; keys of one pattern map stay distinct
+  (is (= (run* [k1 k2] (matcho {:a 1} {k1 1 k2 1})) []))
+  (is (= (set (run* [k1 k2] (matcho {:a 1 :b 1} {k1 1 k2 1})))
+         #{[:a :b] [:b :a]}))
+  (is (= (run* [q] (matcho 5 {})) []))
+  (is (= (run* [q] (matcho [1] {:a 1})) []))
+  ;; backwards: the open map the pattern describes
+  (is (= (map pr-str (run* [x] (matcho x {:a {:b 1}})))
+         ["(lmap {:a (lmap {:b 1} | _0)} | _1)"])))
+
+(deftest test-matcho-vectors-and-sets
+  (is (= (run* [y z] (matcho [1 {:a 2 :b 3}] [y {:a z}])) '([1 2])))
+  (is (= (run* [y] (matcho [1 2 3] [y])) []))
+  (is (= (run* [y] (matcho '(1 2) [1 y])) '(2)))
+  (is (= (set (run* [x] (matcho #{1 2 3} #{1 x}))) #{2 3}))
+  (is (= (run* [v] (matcho #{{:a 1 :b 2} {:c 3}} #{{:a v}})) '(1)))
+  (is (= (map pr-str (run* [x] (matcho x [1 {:a 2}]))) ["[1 (lmap {:a 2} | _0)]"]))
+  (is (= (map pr-str (run* [x] (matcho x #{1}))) ["(lset #{1} | _0)"])))
+
+(deftest test-matcho-order-independent
+  (is (= (run* [q] (fresh [x] (matcho x {:a q}) (== x {:a 1 :b 2}))) '(1)))
+  (is (= (run* [q] (fresh [x] (== x {:a 1 :b 2}) (matcho x {:a q}))) '(1))))
+
+(deftest test-matcho-with-get-ino
+  (is (= (run* [p n] (fresh [u] (get-ino matcho-db p u) (matcho u {:age 40 :name n})))
+         '([(:users 1) "bob"])))
+  (is (= (set (run* [p] (fresh [u] (get-ino matcho-db p u) (matcho u {:name "ada"}))))
+         #{'(:admin) '(:users 0)}))
+  (is (= (run* [n] (fresh [i u]
+                          (get-ino matcho-db [:users i] u)
+                          (matcho u {:name n :tags #{:admin}})))
+         '("ada"))))

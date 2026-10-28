@@ -3982,6 +3982,8 @@
 ;; -----------------------------------------------------------------------------
 ;; Relations
 
+(declare typeo)
+
 (defn lmapo
   "A relation where map m consists of the entries of the map entries plus
    the map rest, which has none of their keys. The keys of entries may be
@@ -3991,6 +3993,10 @@
   (fn [s]
     (let [entries' (walk s entries)]
       (cond
+        ;; no entries to take: m is still a map
+        (and (map? entries') (empty? entries'))
+        ((all (typeo :map `mapo m) (== m rest)) s)
+
         (map? entries')
         ((lmap-matcho (walk-keys s entries') rest m `lmapo [m entries rest]) s)
 
@@ -5486,6 +5492,10 @@
   (fn [a]
     (let [elems' (walk a elems)]
       (cond
+        ;; no elements to take: s is still a set
+        (and (set? elems') (empty? elems'))
+        ((all (typeo :set `seto s) (== s rest)) a)
+
         (set? elems')
         (let [es (map #(walk* a %) elems')]
           ((set-pick-each es rest s `lseto [s elems rest]) a))
@@ -5648,6 +5658,50 @@
                           (clojure.core/== n' k) ((== tail #{}) s)
                           :else ((lmap-suspend `counto [c n] #(set-counto c n) [c n]) s))
           :else ((lmap-suspend `counto [c n] #(set-counto c n) [c n]) s))))))
+
+;; =============================================================================
+;; Patterns
+
+(declare matcho)
+
+(defn- pattern-part
+  "The term standing for pattern p inside a larger pattern, and the goal
+   that matches it: p itself if it is no collection, else a fresh var
+   matched against p."
+  [p]
+  (if (and (coll? p) (not (lvar? p)))
+    (let [x (lvar 'p)] [x (matcho x p)])
+    [p succeed]))
+
+(defn matcho
+  "A relation where x matches the pattern p, Clojure data read when the goal
+   is built: a map matches a map with at least its keys, a set a set with at
+   least its elements, a vector a sequence of its length, element by element,
+   and anything else, logic vars included, unifies. Keys and elements may be
+   logic vars; those of one map or set stay distinct, as in a literal."
+  [x p]
+  (cond
+    (lvar? p) (== x p)
+
+    (map? p)
+    (let [parts (map pattern-part (vals p))]
+      (fresh [r]
+             (lmapo x (zipmap (keys p) (map first parts)) r)
+             (everyg second parts)))
+
+    (set? p)
+    (let [parts (map pattern-part p)]
+      (fresh [r]
+             (lseto x (set (map first parts)) r)
+             (everyg second parts)))
+
+    (vector? p)
+    (let [parts (map pattern-part p)]
+      (all
+       (== x (vec (map first parts)))
+       (everyg second parts)))
+
+    :else (== x p)))
 
 ;; =============================================================================
 ;; miniKanren parity: defrel, type constraints, absento
