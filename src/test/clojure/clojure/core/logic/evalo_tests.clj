@@ -142,3 +142,79 @@
                  (evalo q q))
         quine (clojure.walk/postwalk-replace {'_0 'x} (first q))]
     (is (= (run* [v] (evalo quine v)) [quine]))))
+
+;; -----------------------------------------------------------------------------
+;; lib-env: numbers and sequences
+
+(defn- lib-value
+  ([expr] (lib-value expr {}))
+  ([expr m] (run* [v] (eval-expo expr (env-with lib-env m) v))))
+
+(deftest test-evalo-lib-forwards
+  (are [expr m want] (= (lib-value expr m) [want])
+    '(+ a b) '{a 1.5 b 2} 3.5
+    '(count (filter odd? v)) '{v [1 2 3 5]} 3
+    '(= a (reverse b)) '{a [1 2] b [2 1]} true
+    '(map + a b) '{a [1 2 3] b [10 20]} '(11 22)
+    '(join "\n" (map count (reverse v))) '{v ["ab" "c"]} "1\n2"
+    '(/ (reduce + v) (count v)) '{v [1.0 2.0]} 1.5
+    '(map (fn [x] (max 0 x)) v) '{v [-1 3]} '(0 3)
+    '(second (sort (vector a b c))) '{a 3 b 1 c 2} 2
+    '(join "\n" (range a b s)) '{a 0 b 7 s 3} "0\n3\n6"
+    '(reduce + v) '{v []} 0
+    '(reduce + v) '{v [4]} 4
+    '(reduce (fn [acc x] (conj acc x)) (list) v) '{v [1 2]} '(2 1)
+    '(remove odd? v) '{v [1 2 3 4]} '(2 4)
+    '(filter (fn [x] (if (odd? x) nil x)) v) '{v [1 2 3 4]} '(2 4)
+    '(map :a v) '{v [{:a 1} {:a 2}]} '(1 2)
+    '(count {:a 1}) {} 1
+    '(conj (map inc v) 0) '{v [1]} '(0 2)
+    '(map inc nil) {} ())
+  (testing "map's value is a list, which conj adds to at the front"
+    (is (seq? (first (lib-value '(map inc [1])))))))
+
+(deftest test-evalo-lib-not-in-the-subset
+  ;; these fail rather than give a wrong value
+  (are [expr] (= (lib-value expr) [])
+    '(map inc {:a 1})
+    '(range 0 5 0)
+    '(inc :a)
+    '(count (fn [x] x))
+    '(first "ab")
+    '(str (map inc [1]))
+    '(quot 1 0))
+  (testing "prim-env doesn't have them"
+    (is (= (value '(inc 1)) []))))
+
+(deftest test-evalo-lib-modes
+  (testing "computed primitives wait for their arguments, and run once they come"
+    (is (= (run* [q] (fresh [x] (eval-expo '(+ x 1) (env-with lib-env {'x x}) q)))
+           '[(_0 :- (+ (_1 1) _0))]))
+    (is (= (run* [q] (fresh [x] (eval-expo '(+ x 1) (env-with lib-env {'x x}) q) (== x 4)))
+           [5])))
+  (testing "a kind they rule out fails at once"
+    (is (= (run* [q] (fresh [x] (numbero x) (eval-expo '(count x) (env-with lib-env {'x x}) q))) [])))
+  (testing "map runs backwards: the coll, as a list and as a vector"
+    (let [vs (run* [v] (eval-expo '(map (fn [x] [x x]) v) (env-with lib-env {'v v}) '([1 1] [2 2])))]
+      (is (= vs ['(1 2) [1 2]]))
+      (is (= [false true] (map vector? vs)))))
+  (testing "which one-argument primitive takes [1 2 3] to 3"
+    (is (= (set (run* [op] (symbolo op) (eval-expo (list op 'v) (env-with lib-env '{v [1 2 3]}) 3)))
+           '#{count last}))))
+
+(deftest test-evalo-constants
+  ;; an environment with ::constants: those constants only, no quote, no
+  ;; map or set literals
+  (let [env (env-with lib-env {:clojure.core.logic.evalo/constants [0 "\n" :a] 'v [1 2]})
+        value #(run* [q] (eval-expo % env q))]
+    (is (= (value 0) [0]))
+    (is (= (value 5) []))
+    (is (= (value '(:a {:a 1})) []))
+    (is (= (value '(quote x)) []))
+    (is (= (value '#{0}) []))
+    (is (= (value '[0 v]) [[0 [1 2]]]))
+    (is (= (value '((fn [x] (if x 5 0)) v)) []))
+    (is (= (value '((fn [x] (if x 0 5)) v)) [0]))
+    (testing "the constants a search can use"
+      (is (= (set (run* [c] (conde [(numbero c)] [(stringo c)] [(keywordo c)]) (eval-expo c env c)))
+             #{0 "\n" :a})))))
